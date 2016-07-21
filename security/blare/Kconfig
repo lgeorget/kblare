@@ -1,0 +1,11 @@
+config SECURITY_BLARE
+	bool "Blare support"
+	depends on SECURITY
+	default n
+	help
+	  This selects Blare, an information flow control security mechanism,
+	  which permits the enforcement of data flow policies between
+	  operating system-scale containers of informations such as processes,
+	  files, sockets, etc.
+
+	  If you are unsure how to answer this question, answer N.
