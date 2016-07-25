@@ -19,10 +19,13 @@ static struct security_hook_list blare_hooks[] = {
 	/* example: LSM_HOOK_INIT(task_free, blare_task_free), */
 };
 
-void __init blare_install(void)
+int blare_enabled = 0;
+
+static int __init blare_install(void)
 {
 	pr_info("Blare: Information Flow Monitor.\n");
 	security_add_hooks(blare_hooks, ARRAY_SIZE(blare_hooks));
+	return 0;
 }
 
 security_initcall(blare_install);
