@@ -19,28 +19,6 @@
 #include <linux/slab.h>
 #include <linux/errno.h>
 
-/*
- * An itag (information tag) is the label identifying the content of a
- * container of information. It's an array of integers, representing a set of
- * identifiers of information classes. 
-struct itag
-{
-	size_t count;
-	int* tags;
-}
-
- * A ptag (policy tag) is the label identifying the authorized content of a
- * container of information.  It's an array of arrays of integers, representing
- * the set of sets of authorized information mixes.
-struct ptag
-{
-	size_t count;
-	struct {
-		size_t count;
-		int* tags;
-	} mixes;
-}*/
-
 int merge_itags(struct itag *origin, struct itag *new, struct itag **result)
 {
 	size_t size;
@@ -83,11 +61,10 @@ int check_against_ptag(struct itag* content, struct ptag* policy)
 {
 	int i;
 	for (i = 0 ; i < policy->count ; i++) {
-		if (is_subset(content, policy->mixes[0]))
+		if (is_subset(content, policy->count[i], policy->tags[i]))
 			break;
 	}
 
-	/* i == policy->count means that content is not a subset of any policy
-	 * mix */
-	return i == policy->count ? 0 : 1; 
+	/* i <= policy->count means that content is a subset of policy mix i */
+	return i < policy->count ? 1 : 0;
 }

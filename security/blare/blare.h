@@ -18,6 +18,8 @@
  * used throughout the module.
  */
 
+#include <linux/types.h>
+
 /*
  * An itag (information tag) is the label identifying the content of a
  * container of information. It's an array of integers, representing a set of
@@ -25,7 +27,7 @@
 struct itag
 {
 	size_t count;
-	int* tags;
+	int32_t* tags;
 }
 
 /*
@@ -34,12 +36,16 @@ struct itag
  * the set of sets of authorized information mixes. */
 struct ptag
 {
-	size_t count;
-	struct {
-		size_t count;
-		int* tags;
-	} mixes;
+	size_t mixes_count;
+	size_t* count;
+	int32_t* tags;
 }
+
+/*
+ * These macros define the name of the extended attributes' names
+ */
+#define BLARE_XATTR_ITAG "blare.xattr.itag"
+#define BLARE_XATTR_PTAG "blare.xattr.ptag"
 
 int merge_itags(struct itag *origin, struct itag *new, struct itag **result);
 int check_against_ptag(struct itag* content, struct ptag* policy);
