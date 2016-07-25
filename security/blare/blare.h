@@ -23,12 +23,17 @@
 /*
  * An itag (information tag) is the label identifying the content of a
  * container of information. It's an array of integers, representing a set of
- * identifiers of information classes. */
+ * identifiers of information classes.
+ *
+ * Like ptag, this structure is packed to make it serializable. This should
+ * not encur too much overhead because marshalling/unmarshalling is mostly all
+ * we do with this structure.
+ * */
 struct itag
 {
-	size_t count;
-	int32_t* tags;
-}
+	__u32 count;
+	__s32 *tags;
+} __attribute__((packed))
 
 /*
  * A ptag (policy tag) is the label identifying the authorized content of a
@@ -36,10 +41,10 @@ struct itag
  * the set of sets of authorized information mixes. */
 struct ptag
 {
-	size_t mixes_count;
-	size_t* count;
-	int32_t* tags;
-}
+	__u32 mixes_count;
+	__u32 *count;
+	__s32 *tags;
+} __attribute__((packed))
 
 /*
  * These macros define the name of the extended attributes' names
