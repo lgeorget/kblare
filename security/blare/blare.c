@@ -17,22 +17,61 @@
 
 #include <linux/types.h>
 #include <linux/slab.h>
+#include <linux/gfp.h>
 #include <linux/errno.h>
+
+int copy_itags(struct itag *origin, struct itag *new)
+{
+	int rc;
+	int size = origin->count * sizeof(__s32);
+
+	rc = kmalloc(size, GFP_KERNEL);
+	if (!rc)
+		return -ENOMEM;
+
+	memcpy(new->tags, origin->tags, size);
+	new->count = origin->count;
+	return rc;
+}
 
 int merge_itags(struct itag *origin, struct itag *new, struct itag **result)
 {
-	size_t size;
+	int size;
+	int merge_count;
 	struct itag *merge;
+	__s32* tags;
+	int i,j;
 
-	size = origin->count + new->count;
-	merge = (struct itag*) kmalloc(size, GFP_KERNEL);
+	size = (origin->count + new->count) * sizeof(__s32);
+	tags = kmalloc(size, GFP_KERNEL);
 	if (!merge)
 		return -ENOMEM;
 
-	memcpy(origin->tags, origin->count, merge->tags);
-	memcpy(new->tags, new->count, &merge->tags[origin->count]);
-	merge->count = size;
+	memcpy(origin->tags, tags, origin->count * sizeof(__s32));
+	merge_count = origin->count;
+	for (i=0 ; i<new->count ; i++) {
+		for (j=0 ; j<origin->count && new->tags[i] != origin->tags[i] ;
+		     j++) ;
+		if  (j < origin->count)
+			tags[merge_count++] = new->tags[i];
+	}
+
+	merge = kmalloc(sizeof(struct itag), GFP_KERNEL);
+	if (!merge) {
+		kfree(tags);
+		return -ENOMEM;
+	}
+	merge->tags = kmalloc(merge_count * sizeof(__s32), GFP_KERNEL);
+	if (!merge->tags) {
+		kfree(tags);
+		kfree(merge);
+		return -ENOMEM;
+	}
+
+	memcpy(merge->tags, tags, merge_count*sizeof(__s32));
+	merge->count = merge_count;
 	*result = merge;
+	kfree(tags);
 
 	return 0;
 }

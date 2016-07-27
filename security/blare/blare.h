@@ -19,6 +19,9 @@
  */
 
 #include <linux/types.h>
+#include <linux/spinlock_types.h>
+
+struct dentry;
 
 /*
  * An itag (information tag) is the label identifying the content of a
@@ -33,7 +36,7 @@ struct itag
 {
 	__u32 count;
 	__s32 *tags;
-} __attribute__((packed))
+} __attribute__((packed));
 
 /*
  * A ptag (policy tag) is the label identifying the authorized content of a
@@ -44,7 +47,37 @@ struct ptag
 	__u32 mixes_count;
 	__u32 *count;
 	__s32 *tags;
-} __attribute__((packed))
+} __attribute__((packed));
+
+/*
+ * The state Blare maintains about a process
+ */
+struct blare_task_struct
+{
+	spinlock_t lock;
+	atomic_t refcnt;
+	struct itag *info;
+	struct ptag *policy;
+};
+
+/*
+ * The state Blare maintains about a file
+ */
+struct blare_file_struct
+{
+	struct itag *info;
+	struct ptag *policy;
+};
+
+/*
+ * The state Blare maintains about a socket
+ */
+struct blare_socket_struct
+{
+	spinlock_t lock; /* for use in IRQ context */
+	struct itag *info;
+	struct ptag *policy;
+};
 
 /*
  * These macros define the name of the extended attributes' names
@@ -52,5 +85,11 @@ struct ptag
 #define BLARE_XATTR_ITAG "blare.xattr.itag"
 #define BLARE_XATTR_PTAG "blare.xattr.ptag"
 
+int copy_itags(struct itag *origin, struct itag *new);
 int merge_itags(struct itag *origin, struct itag *new, struct itag **result);
 int check_against_ptag(struct itag* content, struct ptag* policy);
+
+int blare_alloc_file_tag(struct dentry *dp, struct blare_file_struct *sec);
+
+int blare_read_itag(struct dentry *dp, struct itag **info);
+int blare_read_ptag(struct dentry *dp, struct ptag **policy);
