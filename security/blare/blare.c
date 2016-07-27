@@ -76,6 +76,18 @@ int merge_itags(struct itag *origin, struct itag *new, struct itag **result)
 	return 0;
 }
 
+int free_blare_file_struct(struct blare_file_struct *sec)
+{
+	kfree(sec->info);
+	kfree(sec);
+}
+
+int free_blare_task_struct(struct blare_task_struct *sec)
+{
+	kfree(sec->info);
+	kfree(sec);
+}
+
 static int is_subset(struct itag* content, size_t count, int* tags)
 {
 	int i,j;

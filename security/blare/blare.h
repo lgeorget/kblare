@@ -93,3 +93,6 @@ int blare_alloc_file_tag(struct dentry *dp, struct blare_file_struct *sec);
 
 int blare_read_itag(struct dentry *dp, struct itag **info);
 int blare_read_ptag(struct dentry *dp, struct ptag **policy);
+
+int free_blare_file_struct(struct blare_file_struct *sec);
+int free_blare_task_struct(struct blare_task_struct *sec);
