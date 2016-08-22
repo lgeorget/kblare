@@ -96,3 +96,6 @@ int blare_read_ptag(struct dentry *dp, struct ptag **policy);
 
 int free_blare_file_struct(struct blare_file_struct *sec);
 int free_blare_task_struct(struct blare_task_struct *sec);
+
+int blare_may_read(struct dentry *dp, struct blare_file_struct *fstruct);
+int blare_may_append(struct dentry *dp, struct blare_file_struct *fstruct);
