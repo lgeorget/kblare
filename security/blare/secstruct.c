@@ -51,7 +51,7 @@ int blare_alloc_file_tag(struct dentry *dp, struct blare_file_struct *sec)
 /* The current process may read a file */
 int blare_may_read(struct dentry *dp, struct blare_file_struct *fstruct)
 {
-    int rc, icount;
+    int rc;
     struct cred *cred;
     struct blare_task_struct *tstruct;
 
@@ -73,7 +73,7 @@ int blare_may_read(struct dentry *dp, struct blare_file_struct *fstruct)
     /* Information tag propagation */
     rc = blare_alloc_file_tag(dp,fstruct);
     if (rc < 0) {
-		abort_creds();
+		abort_creds(cred);
 	    return rc;
     }
 
@@ -83,7 +83,7 @@ int blare_may_read(struct dentry *dp, struct blare_file_struct *fstruct)
     /* Note: here we want to continue with the other tags even if it fails
      * except when ENOMEM*/
     if (rc < 0)
-	abort_creds();
+	abort_creds(cred);
     else
     	commit_creds(cred);
 
@@ -95,7 +95,6 @@ int blare_may_append(struct dentry *dp, struct blare_file_struct *fstruct)
     const struct cred *ro_cred;
     struct blare_task_struct *tstruct;
     int rc;
-    struct list_head *newtag;
 
     if (current->pid == 0)
         return 0;
@@ -117,7 +116,7 @@ int blare_may_append(struct dentry *dp, struct blare_file_struct *fstruct)
 
     rc = merge_itags(fstruct->info, tstruct->info, &fstruct->info);
 
-    if (rc < 0){
+    if (rc < 0)
             goto end;
 
     rc = blare_write_itag(dp,fstruct->info);

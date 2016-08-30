@@ -36,7 +36,7 @@ struct itag
 {
 	__u32 count;
 	__s32 *tags;
-} __attribute__((packed));
+};
 
 /*
  * A ptag (policy tag) is the label identifying the authorized content of a
@@ -46,8 +46,8 @@ struct ptag
 {
 	__u32 mixes_count;
 	__u32 *count;
-	__s32 *tags;
-} __attribute__((packed));
+	__s32 **tags;
+};
 
 /*
  * The state Blare maintains about a process
@@ -85,6 +85,8 @@ struct blare_socket_struct
 #define BLARE_XATTR_ITAG "blare.xattr.itag"
 #define BLARE_XATTR_PTAG "blare.xattr.ptag"
 
+extern int blare_enabled;
+
 int copy_itags(struct itag *origin, struct itag *new);
 int merge_itags(struct itag *origin, struct itag *new, struct itag **result);
 int check_against_ptag(struct itag* content, struct ptag* policy);
@@ -92,10 +94,11 @@ int check_against_ptag(struct itag* content, struct ptag* policy);
 int blare_alloc_file_tag(struct dentry *dp, struct blare_file_struct *sec);
 
 int blare_read_itag(struct dentry *dp, struct itag **info);
+int blare_write_itag(struct dentry *dp, const struct itag *info);
 int blare_read_ptag(struct dentry *dp, struct ptag **policy);
 
-int free_blare_file_struct(struct blare_file_struct *sec);
-int free_blare_task_struct(struct blare_task_struct *sec);
+void free_blare_file_struct(struct blare_file_struct *sec);
+void free_blare_task_struct(struct blare_task_struct *sec);
 
 int blare_may_read(struct dentry *dp, struct blare_file_struct *fstruct);
 int blare_may_append(struct dentry *dp, struct blare_file_struct *fstruct);

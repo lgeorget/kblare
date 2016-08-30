@@ -20,7 +20,7 @@
 static const char rootdir_name[] __initconst = "blare";
 static const char enabler_name[] __initconst = "enabled";
 
-extern int blare_enabled;
+int blare_enabled = 0;
 
 static ssize_t is_enabled(struct file* f, char __user *buf, size_t size,
 			  loff_t* ppos)

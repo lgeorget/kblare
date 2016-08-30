@@ -22,16 +22,15 @@
 
 int copy_itags(struct itag *origin, struct itag *new)
 {
-	int rc;
 	int size = origin->count * sizeof(__s32);
 
-	rc = kmalloc(size, GFP_KERNEL);
-	if (!rc)
+	new = kmalloc(size, GFP_KERNEL);
+	if (!new)
 		return -ENOMEM;
 
 	memcpy(new->tags, origin->tags, size);
 	new->count = origin->count;
-	return rc;
+	return 0;
 }
 
 int merge_itags(struct itag *origin, struct itag *new, struct itag **result)
@@ -44,7 +43,7 @@ int merge_itags(struct itag *origin, struct itag *new, struct itag **result)
 
 	size = (origin->count + new->count) * sizeof(__s32);
 	tags = kmalloc(size, GFP_KERNEL);
-	if (!merge)
+	if (!tags)
 		return -ENOMEM;
 
 	memcpy(origin->tags, tags, origin->count * sizeof(__s32));
@@ -76,13 +75,13 @@ int merge_itags(struct itag *origin, struct itag *new, struct itag **result)
 	return 0;
 }
 
-int free_blare_file_struct(struct blare_file_struct *sec)
+void free_blare_file_struct(struct blare_file_struct *sec)
 {
 	kfree(sec->info);
 	kfree(sec);
 }
 
-int free_blare_task_struct(struct blare_task_struct *sec)
+void free_blare_task_struct(struct blare_task_struct *sec)
 {
 	kfree(sec->info);
 	kfree(sec);
@@ -111,11 +110,11 @@ static int is_subset(struct itag* content, size_t count, int* tags)
 int check_against_ptag(struct itag* content, struct ptag* policy)
 {
 	int i;
-	for (i = 0 ; i < policy->count ; i++) {
+	for (i = 0 ; i < policy->mixes_count ; i++) {
 		if (is_subset(content, policy->count[i], policy->tags[i]))
 			break;
 	}
 
 	/* i <= policy->count means that content is a subset of policy mix i */
-	return i < policy->count ? 1 : 0;
+	return i < policy->mixes_count ? 1 : 0;
 }

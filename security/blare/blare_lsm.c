@@ -20,20 +20,6 @@
 #include <net/sock.h>
 #include <net/af_unix.h>
 
-static struct security_hook_list blare_hooks[] = {
-	/* example: LSM_HOOK_INIT(task_free, blare_task_free), */
-};
-
-int blare_enabled = 0;
-
-static int __init blare_install(void)
-{
-	pr_info("Blare: Information Flow Monitor.\n");
-	security_add_hooks(blare_hooks, ARRAY_SIZE(blare_hooks));
-	return 0;
-}
-
-
 static int blare_bprm_set_creds(struct linux_binprm *bprm)
 {
 	int rc;
@@ -65,7 +51,7 @@ static int blare_bprm_set_creds(struct linux_binprm *bprm)
 	return 0;
 }
 
-static int blare_security_prepare_creds(struct cred *new,
+static int blare_cred_prepare(struct cred *new,
 		const struct cred *old, gfp_t gfp)
 {
 	struct blare_task_struct *tnew;
@@ -103,8 +89,9 @@ static int blare_task_create(unsigned long clone_flags)
 		pr_err("Blare: CLONE_VM & ~CLONE_THREAD, we cannot track"
 			 " all information flows in this case\n");
 
-	/* TODO fix that bug somehow, for now we cannot allow that */
-	return -EPERM;
+	/* TODO fix that bug somehow, we cannot simply return -EPERM because
+	 * a lot of kernel threads rely on that */
+	return 0;
 }
 
 static void blare_cred_free(struct cred *cred)
@@ -249,5 +236,90 @@ static int blare_socket_sendmsg(struct socket *sock, struct msghdr *msg,
 	return 0;
 }
 
+/* Read/write operations on files.
+ * Note : opening a file won't trigger this hook.
+ * See inode_permission in this case.
+ */
+static int blare_file_permission (struct file *file, int mask){
+	struct blare_file_struct *fstruct;
+	struct dentry *dp;
+	int rc;
 
-security_initcall(blare_install);
+	pr_debug("Blare: checking permission for file");
+
+	if (!file->f_security)
+		return -ENODATA;
+
+	fstruct = file->f_security;
+
+	dp = dget(file->f_path.dentry);
+
+	rc = 0;
+	/* There is no link between the inode/dentry/file on uninitialized FSs */
+	if (!dp)
+		return 0;
+
+	if ((file->f_flags & O_APPEND) && (mask & MAY_WRITE))
+		mask |= MAY_APPEND;
+
+
+	if((mask & MAY_READ) && ! (mask & MAY_APPEND) && ! (mask & MAY_WRITE))
+		rc = blare_may_read(dp,fstruct);
+	else
+		rc = blare_may_append(dp, fstruct);
+
+	dput(dp);
+	return rc;
+}
+
+/*blare_file_alloc_security:
+ *	Allocate and attach a security structure to the file->f_security field.*/
+static int blare_file_alloc_security(struct file *file){
+	struct blare_file_struct *fstruct;
+
+	fstruct = kzalloc(sizeof(struct blare_file_struct), GFP_KERNEL);
+	if (!fstruct)
+		return -ENOMEM;
+	fstruct->info = NULL;
+	file->f_security = fstruct;
+
+	return 0;
+}
+
+/*
+ * blare_file_free_security:
+ * free the security structure attached to the file->f_security field
+ */
+static void blare_file_free_security(struct file *file){
+	struct blare_file_struct *fstruct;
+
+	if (file->f_security) {
+		fstruct = file->f_security;
+		kfree(fstruct);
+		file->f_security = NULL;
+	}
+}
+
+
+static struct security_hook_list blare_hooks[] = {
+//	LSM_HOOK_INIT(bprm_set_creds,blare_bprm_set_creds),
+//	LSM_HOOK_INIT(cred_prepare, blare_cred_prepare),
+//	LSM_HOOK_INIT(task_create,blare_task_create),
+//	LSM_HOOK_INIT(cred_free,blare_cred_free),
+//	LSM_HOOK_INIT(cred_alloc_blank,blare_cred_alloc_blank),
+//	LSM_HOOK_INIT(cred_transfer,blare_cred_transfer),
+	LSM_HOOK_INIT(socket_recvmsg,blare_socket_recvmsg),
+	LSM_HOOK_INIT(socket_sendmsg,blare_socket_sendmsg),
+//	LSM_HOOK_INIT(file_permission,blare_file_permission),
+//	LSM_HOOK_INIT(file_alloc_security,blare_file_alloc_security),
+//	LSM_HOOK_INIT(file_free_security,blare_file_free_security),
+};
+
+static int __init blare_install(void)
+{
+	pr_info("Blare: Information Flow Monitor.\n");
+	security_add_hooks(blare_hooks, ARRAY_SIZE(blare_hooks));
+	return 0;
+}
+
+module_init(blare_install);

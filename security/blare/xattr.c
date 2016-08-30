@@ -45,7 +45,7 @@ static int blare_read_xattr(struct dentry *dp, const char *fieldname, void **buf
 	ino = dp->d_inode;
 
 	if (!ino->i_op->getxattr)
-		return -EOPNOTSUPP;
+		return 0;// -EOPNOTSUPP;
 
 	// Get the size of the xattr
 	size = ino->i_op->getxattr(dp, ino, fieldname, NULL, 0);
@@ -79,8 +79,8 @@ static int blare_write_xattr(struct dentry *dp, const char *fieldname, void *buf
     ino = dp->d_inode;
 
     if (bufsize == 0) { 	/* removal of the xattr altogether */
-	if (!ino->i_op->getxattr || !ino->i_op->getxattr)
-		return -EOPNOTSUPP;
+	if (!ino->i_op->getxattr || !ino->i_op->removexattr)
+		return 0;// -EOPNOTSUPP;
 
 	rc = ino->i_op->getxattr(dp, ino, fieldname, NULL, 0);
 	inode_lock(ino);
@@ -106,17 +106,12 @@ int blare_read_itag(struct dentry *dp, struct itag **info)
 	return blare_read_common(dp, (void**)info, BLARE_XATTR_ITAG);
 }
 
-int blare_write_itag(struct dentry *dp, void *tags, int size)
-{
-	return blare_write_xattr(dp, BLARE_XATTR_ITAG, (void*) tags, size);
-}
-
 int blare_read_ptag(struct dentry *dp, struct ptag **policy)
 {
 	return blare_read_common(dp, (void**)policy, BLARE_XATTR_PTAG);
 }
 
-int blare_write_ptag(struct dentry *dp, void *tags, int size)
+int blare_write_itag(struct dentry *dp, const struct itag *info)
 {
-	return blare_write_xattr(dp, BLARE_XATTR_PTAG, (void*) tags, size);
+	return blare_write_xattr(dp, BLARE_XATTR_ITAG, (void*) info->tags, info->count * sizeof(__s32));
 }
