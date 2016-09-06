@@ -296,14 +296,25 @@ static int add_tags(const struct info_tags* dest, const struct info_tags* src, s
 
 static int dummy_may_read(struct blare_inode_sec *isec, struct blare_task_sec *tsec)
 {
-	return add_tags(&tsec->info, &isec->info, &tsec->info);
+	int rc;
+	mutex_lock(&isec->lock);
+	mutex_lock(&tsec->lock);
+	rc = add_tags(&tsec->info, &isec->info, &tsec->info);
+	mutex_unlock(&tsec->lock);
+	mutex_unlock(&isec->lock);
+	return rc;
 }
 
 static int dummy_may_write(struct blare_inode_sec *isec, struct blare_task_sec *tsec,
 			   struct dentry *dentry)
 {
 	struct info_tags tags = { .count = 0, .tags = NULL };
-	int rc = add_tags(&isec->info, &tsec->info, &tags);
+	int rc;
+	mutex_lock(&isec->lock);
+	mutex_lock(&tsec->lock);
+	rc = add_tags(&isec->info, &tsec->info, &tags);
+	mutex_unlock(&tsec->lock);
+	mutex_unlock(&isec->lock);
 	if (rc < 0)
 		return rc;
 
@@ -325,25 +336,67 @@ static int dummy_file_permission(struct file *file, int mask)
 		return 0;   /* is privileged */
 
 	if (mask & MAY_READ) {
-		inode_lock(inode);
-		mutex_lock(&tsec->lock);
 		dummy_may_read(isec, tsec);
-		mutex_unlock(&tsec->lock);
-		inode_unlock(inode);
 	}
 
 	if (mask & MAY_APPEND || mask & MAY_WRITE) {
 		struct dentry *dentry;
-		inode_lock(inode);
-		mutex_lock(&tsec->lock);
 		dentry = dget(file_dentry(file));
 		dummy_may_write(isec, tsec, dentry);
 		dput(dentry);
-		mutex_unlock(&tsec->lock);
-		inode_unlock(inode);
 	}
 
 	return 0;
+}
+
+static int dummy_socket_sendmsg(struct socket *socket, struct msghdr *msg, int size)
+{
+	struct inode *inode = SOCK_INODE(socket);
+	struct blare_inode_sec *isec = inode->i_security;
+	struct blare_task_sec *tsec = current_security();
+	int rc;
+
+	if (!tsec || !isec)
+		return 0;
+
+	/* Conceptually, the communication channel bears the security label,
+	 * in practice, the sending end stores the security attributes */
+	mutex_lock(&isec->lock);
+	mutex_lock(&tsec->lock);
+	rc = add_tags(&isec->info, &tsec->info, &isec->info);
+	mutex_unlock(&tsec->lock);
+	mutex_unlock(&isec->lock);
+	return rc;
+}
+
+static int dummy_socket_recvmsg(struct socket *socket, struct msghdr *msg, int size, int flags)
+{
+	struct blare_inode_sec *isec;
+	struct blare_task_sec *tsec = current_security();
+	struct sock *sk = socket->sk;
+	struct sock *peer;
+	int rc = 0;
+
+	if (!tsec)
+		return 0;
+	
+	if (sk->sk_family == PF_UNIX) {
+		peer = unix_peer_get(sk);
+		if (!peer)
+			return 0;
+
+		isec = SOCK_INODE(peer->sk_socket)->i_security;
+		if (!isec)
+			return 0;
+
+		mutex_lock(&isec->lock);
+		mutex_lock(&tsec->lock);
+		rc = add_tags(&tsec->info, &isec->info, &tsec->info);
+		mutex_unlock(&tsec->lock);
+		mutex_unlock(&isec->lock);
+		sock_put(peer);
+	} /* else ? */
+	return rc;
 }
 
 /* must be called with either i_mutex or i_security->lock hold */
@@ -414,14 +467,30 @@ unlock:
 
 }
 
+static void __dummy_regen_inode_sec(struct blare_inode_sec *isec,
+				      const void *value, size_t size)
+{
+	int len = size / sizeof(__s32);
+	if (isec->info.count != BLARE_UNINITIALIZED &&
+	    isec->info.count != 0) {
+		kfree(isec->info.tags);
+	}
+
+	isec->info.count = BLARE_UNINITIALIZED;
+	isec->info.tags = kmalloc(size, GFP_NOFS);
+	if (!isec->info.tags)
+		return;
+
+	memcpy(isec->info.tags, value, size);
+	isec->info.count = len;
+}
+
 static void dummy_inode_post_setxattr(struct dentry *dentry, const char *name,
 				      const void *value, size_t size,
 				      int flags)
 {
 	struct inode *inode = d_backing_inode(dentry);
 	struct blare_inode_sec *isec;
-	int len;
-	int i;
 
 	if (strcmp(name, DUMMY_XATTR_TAG) != 0)
 		return;
@@ -430,23 +499,8 @@ static void dummy_inode_post_setxattr(struct dentry *dentry, const char *name,
 	if (!isec)
 		pr_err("Blare: missing inode security structure");
 
-	len = size / sizeof(__s32);
 	mutex_lock(&isec->lock);
-	if (isec->info.count != BLARE_UNINITIALIZED &&
-	    isec->info.count != 0) {
-		kfree(isec->info.tags);
-	}
-
-	isec->info.count = BLARE_UNINITIALIZED;
-	isec->info.tags = kmalloc(len, GFP_NOFS);
-	if (!isec->info.tags)
-		goto unlock;
-
-	for (i=0 ; i<len ; i++)
-		isec->info.tags[i] = ((__s32*)value)[i];
-	isec->info.count = len;
-
-unlock:
+	__dummy_regen_inode_sec(isec, value, size);
 	mutex_unlock(&isec->lock);
 }
 
@@ -464,6 +518,8 @@ static struct security_hook_list dummy_hooks[] = {
 	LSM_HOOK_INIT(cred_free,dummy_cred_free),
 	LSM_HOOK_INIT(cred_alloc_blank,dummy_cred_alloc_blank),
 	LSM_HOOK_INIT(file_permission,dummy_file_permission),
+	LSM_HOOK_INIT(socket_sendmsg,dummy_socket_sendmsg),
+	LSM_HOOK_INIT(socket_recvmsg,dummy_socket_recvmsg),
 };
 
 static int __init dummy_install(void)
