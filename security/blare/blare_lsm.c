@@ -24,26 +24,7 @@
 #include <linux/xattr.h>
 #include <linux/types.h>
 
-const char BLARE_XATTR_TAG[] = XATTR_SECURITY_PREFIX"blare.tag";
-const char *BLARE_XATTR_TAG_SUFFIX = &(BLARE_XATTR_TAG[XATTR_SECURITY_PREFIX_LEN]);
-const int BLARE_XATTR_TAG_LEN = sizeof(BLARE_XATTR_TAG);
-
-#define BLARE_UNINITIALIZED (-1)
-
-struct info_tags {
-	int count;
-	__s32 *tags;
-};
-
-struct blare_inode_sec {
-	struct info_tags info;
-	struct mutex lock;
-};
-
-struct blare_task_sec {
-	struct info_tags info;
-	struct mutex lock;
-};
+#include "blare.h"
 
 static int update_inode_tags(struct blare_inode_sec *isec, const void *value, size_t size);
 static int blare_may_read(struct blare_inode_sec *isec, struct blare_task_sec *tsec);
@@ -155,22 +136,16 @@ static int blare_inode_setxattr(struct dentry *dentry, const char *name,
 {
 	struct inode *inode = d_backing_inode(dentry);
 
-	if (strncmp(name, XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN)
-			== 0) {
-		if (strcmp(name, XATTR_NAME_CAPS) == 0) {
-			if (!capable(CAP_SETFCAP))
-				return -EPERM;
-		} else if (strcmp(name, BLARE_XATTR_TAG) == 0) {
-			if (!uid_eq(current_fsuid(), inode->i_uid) &&
-			    !capable(CAP_MAC_ADMIN)) {
-				return -EPERM;
-			}
-		} else if (!capable(CAP_MAC_ADMIN)) {
+	if (strcmp(name, BLARE_XATTR_TAG) == 0) {
+		if (!uid_eq(current_fsuid(), inode->i_uid) &&
+		    !capable(CAP_MAC_ADMIN))
 			return -EPERM;
-		}
+		else
+			return 0;
 	}
 
-	return 0;
+	/* general case */
+	return cap_inode_setxattr(dentry, name, value, size, flags);
 }
 
 static int blare_inode_getsecurity(struct inode *inode, const char *name, void **buffer, bool alloc)
@@ -229,67 +204,6 @@ static int blare_inode_setsecurity(struct inode *inode, const char *name,
 	isec = inode->i_security;
 	/* i_mutex is already hold */
 	return update_inode_tags(isec, value, size);
-}
-
-static int add_tags(const struct info_tags* dest, const struct info_tags* src, struct info_tags* new_tags)
-{
-	__s32 *tags;
-
-	if (src->count == BLARE_UNINITIALIZED || src->count == 0)
-		return 0;
-
-	if (dest->count == BLARE_UNINITIALIZED || dest->count == 0) {
-		/* this is the easy case, we can just copy the tags */
-		tags = kmemdup(src->tags, src->count * sizeof(__s32), GFP_KERNEL);
-		if (!tags)
-			return -ENOMEM;
-		memcpy(tags, src->tags, src->count * sizeof(__s32));
-		new_tags->tags = tags;
-		new_tags->count = src->count;
-	} else {
-		/* if there were already tags, we have to merge them */
-		int new_count = (dest->count == BLARE_UNINITIALIZED) ?
-			0 : dest->count;
-		int i,j;
-		int last_tag;
-
-		for (i = 0 ; i < src->count ; i++) {
-			for (j = 0 ;
-			     j < dest->count && src->tags[i] != dest->tags[j] ;
-			     j++)
-			{}
-			if (j == dest->count) /* tag is absent */
-				new_count++;
-		}
-
-		if (new_count == dest->count) /* no new tags */
-			return 0;
-
-		tags = kmalloc(new_count * sizeof(__s32), GFP_KERNEL);
-		memcpy(tags, dest->tags, dest->count * sizeof(__s32));
-
-		if (!tags)
-			return -ENOMEM;
-
-		last_tag = dest->count;
-
-		for (i = 0 ; i < src->count ; i++) {
-			for (j = 0 ;
-			     j < dest->count && src->tags[i] != dest->tags[j] ;
-			     j++)
-			{}
-			if (j == dest->count) /* tag is absent */
-				tags[last_tag++] = src->tags[i];
-		}
-
-		if (new_tags == dest)
-			kfree(dest->tags);
-
-		new_tags->count = new_count;
-		new_tags->tags = tags;
-	}
-
-	return 0;
 }
 
 static int blare_may_read(struct blare_inode_sec *isec, struct blare_task_sec *tsec)
