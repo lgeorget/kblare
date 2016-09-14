@@ -230,7 +230,7 @@ static int blare_may_write(struct blare_inode_sec *isec, struct blare_task_sec *
 	if (rc < 0 || tags.count == 0)
 		return rc;
 
-	rc = __vfs_setxattr_noperm(dentry, BLARE_XATTR_TAG, tags.tags, tags.count * sizeof(__s32), 0);
+	rc = vfs_setxattr(dentry, BLARE_XATTR_TAG, tags.tags, tags.count * sizeof(__s32), 0);
 	kfree(tags.tags);
 	return rc;
 }
@@ -420,9 +420,9 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(inode_alloc_security,blare_inode_alloc_security),
 	LSM_HOOK_INIT(inode_free_security,blare_inode_free_security),
 	LSM_HOOK_INIT(inode_getsecurity,blare_inode_getsecurity),
-	LSM_HOOK_INIT(inode_setsecurity,blare_inode_setsecurity),
+/*	LSM_HOOK_INIT(inode_setsecurity,blare_inode_setsecurity),*/
 	LSM_HOOK_INIT(d_instantiate,blare_d_instantiate),
-	LSM_HOOK_INIT(inode_post_setxattr,blare_inode_post_setxattr),
+/*	LSM_HOOK_INIT(inode_post_setxattr,blare_inode_post_setxattr),*/
 	LSM_HOOK_INIT(inode_setxattr,blare_inode_setxattr),
 	LSM_HOOK_INIT(release_secctx,blare_release_secctx),
 	LSM_HOOK_INIT(bprm_set_creds,blare_bprm_set_creds),

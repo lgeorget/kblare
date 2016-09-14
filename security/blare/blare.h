@@ -37,5 +37,9 @@ struct blare_task_sec {
 	struct info_tags info;
 	struct mutex lock;
 };
-int add_tags(const struct info_tags* dest, const struct info_tags* src, struct info_tags* new_tags);
 
+int register_flow(struct info_tags *dest, struct info_tags *src,
+		  struct dentry *dest_dentry);
+void unregister_current_flow(void);
+int add_tags(const struct info_tags* dest, const struct info_tags* src,
+	     struct info_tags* new_tags);
