@@ -208,31 +208,13 @@ static int blare_inode_setsecurity(struct inode *inode, const char *name,
 
 static int blare_may_read(struct blare_inode_sec *isec, struct blare_task_sec *tsec)
 {
-	int rc;
-	mutex_lock(&isec->lock);
-	mutex_lock(&tsec->lock);
-	rc = add_tags(&tsec->info, &isec->info, &tsec->info);
-	mutex_unlock(&tsec->lock);
-	mutex_unlock(&isec->lock);
-	return rc;
+	return register_flow(&tsec->info, &isec->info, NULL);
 }
 
 static int blare_may_write(struct blare_inode_sec *isec, struct blare_task_sec *tsec,
 			   struct dentry *dentry)
 {
-	struct info_tags tags = { .count = 0, .tags = NULL };
-	int rc;
-	mutex_lock(&isec->lock);
-	mutex_lock(&tsec->lock);
-	rc = add_tags(&isec->info, &tsec->info, &tags);
-	mutex_unlock(&tsec->lock);
-	mutex_unlock(&isec->lock);
-	if (rc < 0 || tags.count == 0)
-		return rc;
-
-	rc = vfs_setxattr(dentry, BLARE_XATTR_TAG, tags.tags, tags.count * sizeof(__s32), 0);
-	kfree(tags.tags);
-	return rc;
+	return register_flow(&isec->info, &tsec->info, dentry);
 }
 
 static int blare_file_permission(struct file *file, int mask)
@@ -247,15 +229,21 @@ static int blare_file_permission(struct file *file, int mask)
 	if (!tsec || !isec) /* the FS is not fully initialized or the task */
 		return 0;   /* is privileged */
 
+	struct dentry *dentry = file_dentry(file);
+	if (!dentry ||
+		(strcmp(dentry->d_name.name,"source") != 0 &&
+		 strcmp(dentry->d_name.name,"tuyau") != 0 &&
+		 strcmp(dentry->d_name.name,"destination") != 0))
+		return 0;
+
 	if (mask & MAY_READ) {
 		blare_may_read(isec, tsec);
 	}
 
 	if (mask & MAY_APPEND || mask & MAY_WRITE) {
-		struct dentry *dentry;
-		dentry = dget(file_dentry(file));
+		struct dentry *dentry = file_dentry(file);
+		dget(dentry);
 		blare_may_write(isec, tsec, dentry);
-		dput(dentry);
 	}
 
 	return 0;
@@ -420,9 +408,9 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(inode_alloc_security,blare_inode_alloc_security),
 	LSM_HOOK_INIT(inode_free_security,blare_inode_free_security),
 	LSM_HOOK_INIT(inode_getsecurity,blare_inode_getsecurity),
-/*	LSM_HOOK_INIT(inode_setsecurity,blare_inode_setsecurity),*/
+	LSM_HOOK_INIT(inode_setsecurity,blare_inode_setsecurity),
 	LSM_HOOK_INIT(d_instantiate,blare_d_instantiate),
-/*	LSM_HOOK_INIT(inode_post_setxattr,blare_inode_post_setxattr),*/
+	LSM_HOOK_INIT(inode_post_setxattr,blare_inode_post_setxattr),
 	LSM_HOOK_INIT(inode_setxattr,blare_inode_setxattr),
 	LSM_HOOK_INIT(release_secctx,blare_release_secctx),
 	LSM_HOOK_INIT(bprm_set_creds,blare_bprm_set_creds),
@@ -432,6 +420,7 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(file_permission,blare_file_permission),
 	LSM_HOOK_INIT(socket_sendmsg,blare_socket_sendmsg),
 	LSM_HOOK_INIT(socket_recvmsg,blare_socket_recvmsg),
+	LSM_HOOK_INIT(syscall_before_return,unregister_current_flow),
 };
 
 static int __init blare_install(void)

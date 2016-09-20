@@ -1620,6 +1620,7 @@ union security_list_options {
 				struct audit_context *actx);
 	void (*audit_rule_free)(void *lsmrule);
 #endif /* CONFIG_AUDIT */
+	void (*syscall_before_return)(void);
 };
 
 struct security_hook_heads {
@@ -1831,6 +1832,7 @@ struct security_hook_heads {
 	struct list_head audit_rule_match;
 	struct list_head audit_rule_free;
 #endif /* CONFIG_AUDIT */
+	struct list_head syscall_before_return;
 };
 
 /*

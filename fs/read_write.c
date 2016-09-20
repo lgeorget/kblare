@@ -593,6 +593,7 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 			file_pos_write(f.file, pos);
 		fdput_pos(f);
 	}
+	security_syscall_before_return();
 	return ret;
 }
 
@@ -610,6 +611,7 @@ SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 		fdput_pos(f);
 	}
 
+	security_syscall_before_return();
 	return ret;
 }
 
@@ -630,6 +632,7 @@ SYSCALL_DEFINE4(pread64, unsigned int, fd, char __user *, buf,
 		fdput(f);
 	}
 
+	security_syscall_before_return();
 	return ret;
 }
 
@@ -650,6 +653,7 @@ SYSCALL_DEFINE4(pwrite64, unsigned int, fd, const char __user *, buf,
 		fdput(f);
 	}
 
+	security_syscall_before_return();
 	return ret;
 }
 
@@ -979,13 +983,17 @@ static ssize_t do_pwritev(unsigned long fd, const struct iovec __user *vec,
 SYSCALL_DEFINE3(readv, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen)
 {
-	return do_readv(fd, vec, vlen, 0);
+	int rc = do_readv(fd, vec, vlen, 0);
+	security_syscall_before_return();
+	return rc;
 }
 
 SYSCALL_DEFINE3(writev, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen)
 {
-	return do_writev(fd, vec, vlen, 0);
+	int rc = do_writev(fd, vec, vlen, 0);
+	security_syscall_before_return();
+	return rc;
 }
 
 SYSCALL_DEFINE5(preadv, unsigned long, fd, const struct iovec __user *, vec,
@@ -993,7 +1001,9 @@ SYSCALL_DEFINE5(preadv, unsigned long, fd, const struct iovec __user *, vec,
 {
 	loff_t pos = pos_from_hilo(pos_h, pos_l);
 
-	return do_preadv(fd, vec, vlen, pos, 0);
+	int rc = do_preadv(fd, vec, vlen, pos, 0);
+	security_syscall_before_return();
+	return rc;
 }
 
 SYSCALL_DEFINE6(preadv2, unsigned long, fd, const struct iovec __user *, vec,
@@ -1001,11 +1011,14 @@ SYSCALL_DEFINE6(preadv2, unsigned long, fd, const struct iovec __user *, vec,
 		int, flags)
 {
 	loff_t pos = pos_from_hilo(pos_h, pos_l);
+	int rc;
 
 	if (pos == -1)
-		return do_readv(fd, vec, vlen, flags);
-
-	return do_preadv(fd, vec, vlen, pos, flags);
+		rc = do_readv(fd, vec, vlen, flags);
+	else
+		rc = do_preadv(fd, vec, vlen, pos, flags);
+	security_syscall_before_return();
+	return rc;
 }
 
 SYSCALL_DEFINE5(pwritev, unsigned long, fd, const struct iovec __user *, vec,
@@ -1013,7 +1026,9 @@ SYSCALL_DEFINE5(pwritev, unsigned long, fd, const struct iovec __user *, vec,
 {
 	loff_t pos = pos_from_hilo(pos_h, pos_l);
 
-	return do_pwritev(fd, vec, vlen, pos, 0);
+	int rc = do_pwritev(fd, vec, vlen, pos, 0);
+	security_syscall_before_return();
+	return rc;
 }
 
 SYSCALL_DEFINE6(pwritev2, unsigned long, fd, const struct iovec __user *, vec,
@@ -1022,10 +1037,13 @@ SYSCALL_DEFINE6(pwritev2, unsigned long, fd, const struct iovec __user *, vec,
 {
 	loff_t pos = pos_from_hilo(pos_h, pos_l);
 
+	int rc;
 	if (pos == -1)
-		return do_writev(fd, vec, vlen, flags);
-
-	return do_pwritev(fd, vec, vlen, pos, flags);
+		rc = do_writev(fd, vec, vlen, flags);
+	else
+		rc = do_pwritev(fd, vec, vlen, pos, flags);
+	security_syscall_before_return();
+	return rc;
 }
 
 #ifdef CONFIG_COMPAT
@@ -1408,12 +1426,15 @@ SYSCALL_DEFINE4(sendfile, int, out_fd, int, in_fd, off_t __user *, offset, size_
 			return -EFAULT;
 		pos = off;
 		ret = do_sendfile(out_fd, in_fd, &pos, count, MAX_NON_LFS);
+		security_syscall_before_return();
 		if (unlikely(put_user(pos, offset)))
 			return -EFAULT;
 		return ret;
 	}
 
-	return do_sendfile(out_fd, in_fd, NULL, count, 0);
+	ret = do_sendfile(out_fd, in_fd, NULL, count, 0);
+	security_syscall_before_return();
+	return ret;
 }
 
 SYSCALL_DEFINE4(sendfile64, int, out_fd, int, in_fd, loff_t __user *, offset, size_t, count)

@@ -19,7 +19,6 @@
 #include <linux/gfp.h>
 #include <linux/types.h>
 #include <linux/list.h>
-#include <linux/rculist.h>
 #include <linux/spinlock.h>
 #include <linux/fsnotify.h>
 
@@ -63,6 +62,7 @@ int register_flow(struct info_tags *dest, struct info_tags *src,
 	new_flow->resp = current;
 	new_flow->src = src;
 	new_flow->dest = dest;
+	new_flow->dest_dentry = dest_dentry;
 	list_add(&new_flow->open_flows, &flows);
 	bfs(src,&flows);
 
@@ -76,16 +76,20 @@ void unregister_current_flow()
 	struct flow *flow;
 	mutex_lock(&flows_lock);
 	flow = list_first_entry(&flows, struct flow, open_flows);
-	while (flow->resp != current) {
+	while (flow->resp != current && &flow->open_flows != &flows) {
 		flow = list_next_entry(flow, open_flows);
 	}
-	list_del(&flow->open_flows);
-	mutex_unlock(&flows_lock);
 
-	kfree(flow);
+	if (&flow->open_flows != &flows) { /* we found the flow to delete */
+		list_del(&flow->open_flows);
+		if (flow->dest_dentry)
+			dput(flow->dest_dentry);
+		kfree(flow);
+	}
+	mutex_unlock(&flows_lock);
 }
 
-static int visit_next(struct info_tags *ctn, struct dentry *ctn_dentry, struct node *next, struct node *visit_list)
+static noinline int visit_next(struct info_tags *ctn, struct dentry *ctn_dentry, struct node *next, struct node *visit_list)
 {
 	// il faut d'abord vérifier si le nœud n'est pas déjà visité
 	struct node *iter;
@@ -112,7 +116,7 @@ static int visit_next(struct info_tags *ctn, struct dentry *ctn_dentry, struct n
 	return 0;
 }
 
-static int bfs(struct info_tags *src, struct list_head *graph)
+static noinline int bfs(struct info_tags *src, struct list_head *graph)
 {
 	struct node visit;
 	struct node *next;
@@ -129,6 +133,7 @@ static int bfs(struct info_tags *src, struct list_head *graph)
 	first->container_dentry = NULL; /* ignored, because we propagate
 					   nothing INTO the src container */
 	next = first;
+//	pr_info("Blare: Starting BFS from %p, container: %p\n", first, first->container);
 
 	rc = 0;
 	INIT_LIST_HEAD(&visit.list);
@@ -136,6 +141,9 @@ static int bfs(struct info_tags *src, struct list_head *graph)
 	list_for_each_entry(next, &visit.list, list) {
 		list_for_each_entry(iter, graph, open_flows) {
 			if (iter->src == next->container) {
+			//	pr_info("Blare: iter->src matches, propagation into: %p\n",iter->dest);
+			//	if (iter->dest_dentry)
+			//		pr_info("\t... dest is %s\n",iter->dest_dentry->d_name.name);
 				rc = visit_next(iter->dest, iter->dest_dentry, next, &visit);
 				if (rc)
 					goto free_all;
@@ -146,7 +154,9 @@ static int bfs(struct info_tags *src, struct list_head *graph)
 	}
 
 free_all:
-	list_for_each_entry(next, &visit.list, list) {
+	while (!list_empty(&visit.list)) {
+		next = list_entry(visit.list.next, struct node, list);
+		list_del(&next->list);
 		kfree(next);
 	}
 
@@ -154,7 +164,7 @@ free_all:
 }
 
 
-static int generic_add_tags(struct info_tags *dest, struct dentry *dest_dentry, const struct info_tags *src)
+static noinline int generic_add_tags(struct info_tags *dest, struct dentry *dest_dentry, const struct info_tags *src)
 {
 	int rc;
 	struct info_tags tags = {0, NULL};
@@ -163,21 +173,26 @@ static int generic_add_tags(struct info_tags *dest, struct dentry *dest_dentry, 
 	if (rc < 0 || tags.count == 0)
 		 return rc;
 
+	rc = 0;
 	if (dest_dentry) {
 		struct inode *inode = d_backing_inode(dest_dentry);
-		if (inode->i_op->setxattr) {
+		if (!inode) {
+			pr_err("Blare: No inode corresponding to dentry");
+			rc = -ENODATA;
+		} else if (inode->i_op->setxattr) {
 			inode_lock(inode);
 			rc = inode->i_op->setxattr(dest_dentry, inode,
 						   BLARE_XATTR_TAG,
 						   tags.tags, tags.count,
-						   XATTR_REPLACE|XATTR_CREATE);
+						   0);
 			if (!rc)
 				fsnotify_xattr(dest_dentry);
 			inode_unlock(inode);
 		}
+		/* dput(dentry); */
 	}
-
-	if (!rc) { /* the new tags have been computed and propagated into the
+commit:
+	if (rc >= 0) { /* the new tags have been computed and propagated into the
 		      inode's xattr, if required. Time to commit the changes */
 		__s32 *old_tags = dest->tags;
 		dest->tags = tags.tags;

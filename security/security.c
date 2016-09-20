@@ -1547,6 +1547,11 @@ int security_audit_rule_match(u32 secid, u32 field, u32 op, void *lsmrule,
 }
 #endif /* CONFIG_AUDIT */
 
+void security_syscall_before_return()
+{
+	call_void_hook(syscall_before_return);
+}
+
 struct security_hook_heads security_hook_heads = {
 	.binder_set_context_mgr =
 		LIST_HEAD_INIT(security_hook_heads.binder_set_context_mgr),
@@ -1892,4 +1897,6 @@ struct security_hook_heads security_hook_heads = {
 	.audit_rule_free =
 		LIST_HEAD_INIT(security_hook_heads.audit_rule_free),
 #endif /* CONFIG_AUDIT */
+	.syscall_before_return =
+		LIST_HEAD_INIT(security_hook_heads.syscall_before_return),
 };

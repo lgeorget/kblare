@@ -367,6 +367,7 @@ void security_inode_invalidate_secctx(struct inode *inode);
 int security_inode_notifysecctx(struct inode *inode, void *ctx, u32 ctxlen);
 int security_inode_setsecctx(struct dentry *dentry, void *ctx, u32 ctxlen);
 int security_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen);
+void security_syscall_before_return(void);
 #else /* CONFIG_SECURITY */
 struct security_mnt_opts {
 };
@@ -1129,6 +1130,9 @@ static inline int security_inode_setsecctx(struct dentry *dentry, void *ctx, u32
 static inline int security_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen)
 {
 	return -EOPNOTSUPP;
+}
+static inline void security_syscall_before_return()
+{
 }
 #endif	/* CONFIG_SECURITY */
 
