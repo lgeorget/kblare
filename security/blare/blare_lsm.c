@@ -98,6 +98,33 @@ static void blare_cred_free(struct cred *cred)
 	cred->security = NULL;
 }
 
+static int blare_cred_prepare(struct cred *new, const struct cred *old,
+			      gfp_t gfp)
+{
+	const struct blare_task_sec *old_tsec;
+	struct blare_task_sec *tsec;
+
+	old_tsec = old->security;
+
+	if (!old_tsec)
+		return 0;
+
+	tsec = kmemdup(old_tsec, sizeof(struct blare_task_sec), gfp);
+	if (!tsec)
+		return -ENOMEM;
+	if (old_tsec->info.tags) {
+		tsec->info.tags = kmemdup(old_tsec->info.tags,
+					  sizeof(struct blare_task_sec), gfp);
+		if (!tsec->info.tags) {
+			kfree(tsec);
+			return -ENOMEM;
+		}
+	}
+
+	new->security = tsec;
+	return 0;
+}
+
 static void blare_cred_transfer(struct cred *new, const struct cred *old)
 {
 	const struct blare_task_sec *old_tsec = old->security;
@@ -228,13 +255,6 @@ static int blare_file_permission(struct file *file, int mask)
 
 	if (!tsec || !isec) /* the FS is not fully initialized or the task */
 		return 0;   /* is privileged */
-
-	struct dentry *dentry = file_dentry(file);
-	if (!dentry ||
-		(strcmp(dentry->d_name.name,"source") != 0 &&
-		 strcmp(dentry->d_name.name,"tuyau") != 0 &&
-		 strcmp(dentry->d_name.name,"destination") != 0))
-		return 0;
 
 	if (mask & MAY_READ) {
 		blare_may_read(isec, tsec);
@@ -414,6 +434,7 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(inode_setxattr,blare_inode_setxattr),
 	LSM_HOOK_INIT(release_secctx,blare_release_secctx),
 	LSM_HOOK_INIT(bprm_set_creds,blare_bprm_set_creds),
+	LSM_HOOK_INIT(cred_prepare,blare_cred_prepare),
 	LSM_HOOK_INIT(cred_transfer,blare_cred_transfer),
 	LSM_HOOK_INIT(cred_free,blare_cred_free),
 	LSM_HOOK_INIT(cred_alloc_blank,blare_cred_alloc_blank),
