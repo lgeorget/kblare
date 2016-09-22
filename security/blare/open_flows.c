@@ -73,18 +73,15 @@ int register_flow(struct info_tags *dest, struct info_tags *src,
 
 void unregister_current_flow()
 {
-	struct flow *flow;
+	struct flow *flow, *temp;
 	mutex_lock(&flows_lock);
-	flow = list_first_entry(&flows, struct flow, open_flows);
-	while (flow->resp != current && &flow->open_flows != &flows) {
-		flow = list_next_entry(flow, open_flows);
-	}
-
-	if (&flow->open_flows != &flows) { /* we found the flow to delete */
-		list_del(&flow->open_flows);
-		if (flow->dest_dentry)
-			dput(flow->dest_dentry);
-		kfree(flow);
+	list_for_each_entry_safe(flow, temp, &flows, open_flows) {
+		if (flow->resp == current) {
+			list_del(&flow->open_flows);
+			if (flow->dest_dentry)
+				dput(flow->dest_dentry);
+			kfree(flow);
+		}
 	}
 	mutex_unlock(&flows_lock);
 }

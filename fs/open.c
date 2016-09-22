@@ -326,6 +326,8 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
 		error = vfs_fallocate(f.file, mode, offset, len);
 		fdput(f);
 	}
+
+	security_syscall_before_return();
 	return error;
 }
 

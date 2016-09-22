@@ -138,6 +138,7 @@ SYSCALL_DEFINE3(old_readdir, unsigned int, fd,
 		error = buf.result;
 
 	fdput_pos(f);
+	security_syscall_before_return();
 	return error;
 }
 
@@ -238,6 +239,7 @@ SYSCALL_DEFINE3(getdents, unsigned int, fd,
 			error = count - buf.count;
 	}
 	fdput_pos(f);
+	security_syscall_before_return();
 	return error;
 }
 
@@ -322,5 +324,6 @@ SYSCALL_DEFINE3(getdents64, unsigned int, fd,
 			error = count - buf.count;
 	}
 	fdput_pos(f);
+	security_syscall_before_return();
 	return error;
 }
