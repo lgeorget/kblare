@@ -2408,6 +2408,7 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 {
 	unsigned long end;
 	struct vm_area_struct *vma, *prev, *last;
+	unsigned int partial_unmapping = 0;
 
 	if ((offset_in_page(start)) || start > TASK_SIZE || len > TASK_SIZE-start)
 		return -EINVAL;
@@ -2450,6 +2451,10 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 		if (error)
 			return error;
 		prev = vma;
+
+		/* We have only done a partial unmapping since some pages from
+		 * the same vma will remain mapped */
+		partial_unmapping = 1;
 	}
 
 	/* Does it split the last one? */
