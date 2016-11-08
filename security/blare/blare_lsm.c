@@ -349,6 +349,16 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 	if (!inode)
 		return;
 
+	/* If this method is called with opt_dentry == root of the filesystem
+	 * this may mean that the superblock is being initialized, in which case
+	 * it is a bad idea to try to play with its xattrs.
+	 * We just don't give tags to the dentry in this case
+	 * TODO: defer the initialization and give the tags after the superblock
+	 * is ready
+	 */
+	if (opt_dentry->d_parent == opt_dentry)
+		return;
+
 	isec = inode->i_security;
 	mutex_lock(&isec->lock);
 	if (!inode->i_op->getxattr)
