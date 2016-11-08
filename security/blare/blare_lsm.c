@@ -281,11 +281,7 @@ static int blare_socket_sendmsg(struct socket *socket, struct msghdr *msg, int s
 
 	/* Conceptually, the communication channel bears the security label,
 	 * in practice, the sending end stores the security attributes */
-	mutex_lock(&isec->lock);
-	mutex_lock(&tsec->lock);
-	rc = add_tags(&isec->info, &tsec->info, &isec->info);
-	mutex_unlock(&tsec->lock);
-	mutex_unlock(&isec->lock);
+	register_flow(&isec->info, &tsec->info, NULL);
 	return rc;
 }
 
@@ -305,15 +301,18 @@ static int blare_socket_recvmsg(struct socket *socket, struct msghdr *msg, int s
 		if (!peer)
 			return 0;
 
+		unix_state_lock(peer);
+		if (!peer->sk_socket) {
+			unix_state_unlock(peer);
+			goto put_sock;
+		}
 		isec = SOCK_INODE(peer->sk_socket)->i_security;
+		unix_state_unlock(peer);
 		if (!isec)
-			return 0;
+			goto put_sock;
 
-		mutex_lock(&isec->lock);
-		mutex_lock(&tsec->lock);
-		rc = add_tags(&tsec->info, &isec->info, &tsec->info);
-		mutex_unlock(&tsec->lock);
-		mutex_unlock(&isec->lock);
+		register_flow(&tsec->info, &isec->info, NULL);
+put_sock:
 		sock_put(peer);
 	} /* else ? */
 	return rc;
