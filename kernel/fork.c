@@ -418,6 +418,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		retval = -EINTR;
 		goto fail_uprobe_end;
 	}
+
 	flush_cache_dup_mm(oldmm);
 	uprobe_dup_mmap(oldmm, mm);
 	/*
@@ -707,6 +708,7 @@ EXPORT_SYMBOL_GPL(__mmdrop);
 static inline void __mmput(struct mm_struct *mm)
 {
 	VM_BUG_ON(atomic_read(&mm->mm_users));
+	security_mm_sec_free(mm);
 
 	uprobe_clear_state(mm);
 	exit_aio(mm);
@@ -961,9 +963,13 @@ static struct mm_struct *dup_mm(struct task_struct *tsk)
 	if (!mm_init(mm, tsk))
 		goto fail_nomem;
 
-	err = dup_mmap(mm, oldmm);
+	err = security_mm_dup_security(mm, oldmm);
 	if (err)
 		goto free_pt;
+
+	err = dup_mmap(mm, oldmm);
+	if (err)
+		goto free_sec;
 
 	mm->hiwater_rss = get_mm_rss(mm);
 	mm->hiwater_vm = mm->total_vm;
@@ -973,6 +979,8 @@ static struct mm_struct *dup_mm(struct task_struct *tsk)
 
 	return mm;
 
+free_sec:
+	security_mm_sec_free(mm);
 free_pt:
 	/* don't put binfmt in mmput, we haven't got module yet */
 	mm->binfmt = NULL;

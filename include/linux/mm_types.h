@@ -517,6 +517,7 @@ struct mm_struct {
 #ifdef CONFIG_MMU
 	struct work_struct async_put_work;
 #endif
+	void *m_sec;
 };
 
 static inline void mm_init_cpumask(struct mm_struct *mm)

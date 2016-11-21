@@ -1621,6 +1621,8 @@ union security_list_options {
 	void (*audit_rule_free)(void *lsmrule);
 #endif /* CONFIG_AUDIT */
 	void (*syscall_before_return)(void);
+	int (*mm_dup_security)(struct mm_struct *mm, struct mm_struct *oldmm);
+	void (*mm_sec_free)(struct mm_struct *mm);
 };
 
 struct security_hook_heads {
@@ -1833,6 +1835,8 @@ struct security_hook_heads {
 	struct list_head audit_rule_free;
 #endif /* CONFIG_AUDIT */
 	struct list_head syscall_before_return;
+	struct list_head mm_dup_security;
+	struct list_head mm_sec_free;
 };
 
 /*
