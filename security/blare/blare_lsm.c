@@ -27,13 +27,10 @@
 #include "blare.h"
 
 static int update_inode_tags(struct blare_inode_sec *isec, const void *value, size_t size);
-static int blare_may_read(struct blare_inode_sec *isec, struct blare_task_sec *tsec);
-static int blare_may_write(struct blare_inode_sec *isec, struct blare_task_sec *tsec,
-			   struct dentry *dentry);
 
 static int blare_bprm_set_creds(struct linux_binprm *bprm)
 {
-	struct blare_task_sec *tsec;
+	struct blare_mm_sec *msec;
 	struct inode *inode = file_inode(bprm->file);
 	struct blare_inode_sec *isec;
 
@@ -51,86 +48,34 @@ static int blare_bprm_set_creds(struct linux_binprm *bprm)
 	if (capable(CAP_MAC_ADMIN))
 		return 0;
 
-	tsec = kzalloc(sizeof(struct blare_task_sec), GFP_KERNEL);
-	mutex_init(&tsec->lock);
-	if (!tsec)
+	msec = kzalloc(sizeof(struct blare_mm_sec), GFP_KERNEL);
+	if (!msec)
 		return -ENOMEM;
-	tsec->info.count = BLARE_UNINITIALIZED;
+	msec->info.count = 0;
 
 	if (isec->info.count > 0) {
 		/* Copy the information tag */
-		tsec->info.tags = kmemdup(isec->info.tags, isec->info.count * sizeof(__s32), GFP_KERNEL);
-		if (!tsec->info.tags) {
-			kfree(tsec);
+		msec->info.tags = kmemdup(isec->info.tags, isec->info.count * sizeof(__s32), GFP_KERNEL);
+		if (!msec->info.tags) {
+			kfree(msec);
 			return -ENOMEM;
 		}
-		tsec->info.count = isec->info.count;
+		msec->info.count = isec->info.count;
 	} else {
-		tsec->info.count = 0;
-		tsec->info.tags = NULL;
+		msec->info.count = 0;
+		msec->info.tags = NULL;
 	}
-	bprm->cred->security = tsec;
+	bprm->cred->security = msec;
 
 	return 0;
 }
 
-static int blare_cred_alloc_blank(struct cred *cred, gfp_t gfp)
+static void blare_bprm_committing_creds(struct linux_binprm *bprm)
 {
-	/* Allocate a security structure for the process's tags */
-	struct blare_task_sec *tsec = kzalloc(sizeof(struct blare_task_sec), gfp);
-	if (!tsec)
-		return -ENOMEM;
-
-	tsec->info.count = BLARE_UNINITIALIZED;
-	mutex_init(&tsec->lock);
-	cred->security = tsec;
-	return 0;
-}
-
-static void blare_cred_free(struct cred *cred)
-{
-	struct blare_task_sec *tsec = cred->security;
-
-	if (tsec) {
-		kfree(tsec->info.tags);
-		kfree(tsec);
-	}
-	cred->security = NULL;
-}
-
-static int blare_cred_prepare(struct cred *new, const struct cred *old,
-			      gfp_t gfp)
-{
-	const struct blare_task_sec *old_tsec;
-	struct blare_task_sec *tsec;
-
-	old_tsec = old->security;
-
-	if (!old_tsec)
-		return 0;
-
-	tsec = kmemdup(old_tsec, sizeof(struct blare_task_sec), gfp);
-	if (!tsec)
-		return -ENOMEM;
-	if (old_tsec->info.tags) {
-		tsec->info.tags = kmemdup(old_tsec->info.tags,
-					  sizeof(struct blare_task_sec), gfp);
-		if (!tsec->info.tags) {
-			kfree(tsec);
-			return -ENOMEM;
-		}
-	}
-
-	new->security = tsec;
-	return 0;
-}
-
-static void blare_cred_transfer(struct cred *new, const struct cred *old)
-{
-	const struct blare_task_sec *old_tsec = old->security;
-	struct blare_task_sec *tsec = new->security;
-
-	*tsec = *old_tsec;
+	/* the new process is not started yet so we cannot race with anybody,
+	 * right? */
+	current->mm->m_sec = bprm->cred->security;
+	bprm->cred->security = NULL;
 }
 
 static int blare_inode_alloc_security(struct inode* inode)
@@ -142,8 +87,7 @@ static int blare_inode_alloc_security(struct inode* inode)
 		return -ENOMEM;
 
 	isec = inode->i_security;
-	mutex_init(&isec->lock);
-	isec->info.count = BLARE_UNINITIALIZED;
+	isec->info.count = 0;
 	isec->info.tags = NULL;
 
 	return 0;
@@ -163,6 +107,9 @@ static int blare_inode_setxattr(struct dentry *dentry, const char *name,
 {
 	struct inode *inode = d_backing_inode(dentry);
 
+	/* You cannot change the security extended attributes unless you are
+	 * the Security Administrator (capability MAC_ADMIN) or the owner of
+	 * the file (for debugging or decentralization purposes) */
 	if (strcmp(name, BLARE_XATTR_TAG) == 0) {
 		if (!uid_eq(current_fsuid(), inode->i_uid) &&
 		    !capable(CAP_MAC_ADMIN))
@@ -173,6 +120,31 @@ static int blare_inode_setxattr(struct dentry *dentry, const char *name,
 
 	/* general case */
 	return cap_inode_setxattr(dentry, name, value, size, flags);
+}
+
+static int blare_inode_removexattr(struct dentry *dentry, const char *name)
+{
+	/* There's no post_removexattr hook so we must handle the removal of
+	 * attributes here, this is very similar to setxattr but we must
+	 * refresh the inode security attributes here */
+	struct inode *inode = d_backing_inode(dentry);
+	if (strcmp(name, BLARE_XATTR_TAG) == 0) {
+		if (!uid_eq(current_fsuid(), inode->i_uid) &&
+		    !capable(CAP_MAC_ADMIN)) {
+			return -EPERM;
+		} else {
+			if (inode->i_security) {
+				struct blare_inode_sec *isec = inode->i_security;
+				kfree(isec->info.tags);
+				isec->info.count = 0;
+				isec->info.tags = NULL;
+			}
+			return 0;
+		}
+	}
+
+	/* general case */
+	return cap_inode_removexattr(dentry, name);
 }
 
 static int blare_inode_getsecurity(struct inode *inode, const char *name, void **buffer, bool alloc)
@@ -189,8 +161,7 @@ static int blare_inode_getsecurity(struct inode *inode, const char *name, void *
 	}
 
 	isec = inode->i_security;
-	size = isec->info.count == BLARE_UNINITIALIZED ?
-		0 : isec->info.count * sizeof(__s32);
+	size = isec->info.count * sizeof(__s32);
 	if (!alloc || !buffer)
 		goto ret;
 
@@ -233,67 +204,74 @@ static int blare_inode_setsecurity(struct inode *inode, const char *name,
 	return update_inode_tags(isec, value, size);
 }
 
-static int blare_may_read(struct blare_inode_sec *isec, struct blare_task_sec *tsec)
-{
-	return register_flow(&tsec->info, &isec->info, NULL);
-}
-
-static int blare_may_write(struct blare_inode_sec *isec, struct blare_task_sec *tsec,
-			   struct dentry *dentry)
-{
-	return register_flow(&isec->info, &tsec->info, dentry);
-}
-
 static int blare_file_permission(struct file *file, int mask)
 {
 	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
-	struct blare_task_sec *tsec = current_security();
+	struct blare_mm_sec *msec;
+	int ret = 0;
+	char pathbuffer[256];
+	char * path;
 
 	if (!mask) /* an existence check is not a flow */
 		return 0;
 
-	if (!tsec || !isec) /* the FS is not fully initialized or the task */
+	if (!current->mm)
+		return 0; /* kernel threads do not propagate flows */
+
+	msec = current->mm->m_sec;
+	if (!msec || !isec) /* the FS is not fully initialized or the task */
 		return 0;   /* is privileged */
 
 	if (mask & MAY_READ) {
-		blare_may_read(isec, tsec);
+		path = d_path(&file->f_path, pathbuffer, 256);
+		pr_debug("kblare reading %s\n", path);
+		ret = register_read(inode);
 	}
 
-	if (mask & MAY_APPEND || mask & MAY_WRITE) {
-		struct dentry *dentry = file_dentry(file);
-		dget(dentry);
-		blare_may_write(isec, tsec, dentry);
+	if (!ret && (mask & MAY_APPEND || mask & MAY_WRITE)) {
+		/*struct dentry *dentry = file_dentry(file);
+		dget(dentry);*/
+		path = d_path(&file->f_path, pathbuffer, 256);
+		pr_debug("kblare writing %s\n", path);
+		ret = register_write(inode);
 	}
 
-	return 0;
+	return ret;
 }
 
 static int blare_socket_sendmsg(struct socket *socket, struct msghdr *msg, int size)
 {
 	struct inode *inode = SOCK_INODE(socket);
 	struct blare_inode_sec *isec = inode->i_security;
-	struct blare_task_sec *tsec = current_security();
-	int rc;
+	struct blare_mm_sec *msec;
 
-	if (!tsec || !isec)
+	if (!current->mm)
+		return 0;
+
+	msec = current->mm->m_sec;
+	if (!msec || !isec)
 		return 0;
 
 	/* Conceptually, the communication channel bears the security label,
 	 * in practice, the sending end stores the security attributes */
-	register_flow(&isec->info, &tsec->info, NULL);
-	return rc;
+	return register_write(inode);
 }
 
 static int blare_socket_recvmsg(struct socket *socket, struct msghdr *msg, int size, int flags)
 {
+	struct inode *inode;
 	struct blare_inode_sec *isec;
-	struct blare_task_sec *tsec = current_security();
+	struct blare_mm_sec *msec;
 	struct sock *sk = socket->sk;
 	struct sock *peer;
 	int rc = 0;
 
-	if (!tsec)
+	if (!current->mm)
+		return 0;
+
+	msec = current->mm->m_sec;
+	if (!msec)
 		return 0;
 
 	if (sk->sk_family == PF_UNIX) {
@@ -306,28 +284,26 @@ static int blare_socket_recvmsg(struct socket *socket, struct msghdr *msg, int s
 			unix_state_unlock(peer);
 			goto put_sock;
 		}
-		isec = SOCK_INODE(peer->sk_socket)->i_security;
+		inode = SOCK_INODE(peer->sk_socket);
 		unix_state_unlock(peer);
+		isec = inode->i_security;
 		if (!isec)
 			goto put_sock;
 
-		register_flow(&tsec->info, &isec->info, NULL);
+		rc = register_read(inode);
 put_sock:
 		sock_put(peer);
 	} /* else ? */
 	return rc;
 }
 
-/* must be called with either i_mutex or i_security->lock hold */
 static int update_inode_tags(struct blare_inode_sec *isec, const void *value, size_t size)
 {
 	int i;
 	int len = size / sizeof(__s32);
 
-	if (isec->info.count != BLARE_UNINITIALIZED &&
-	    isec->info.count != 0) {
+	if (tags_initialized(&isec->info))
 		kfree(isec->info.tags);
-	}
 
 	isec->info.tags = kmalloc(size, GFP_NOFS);
 	if (!isec->info.tags)
@@ -359,14 +335,13 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 		return;
 
 	isec = inode->i_security;
-	mutex_lock(&isec->lock);
 	if (!inode->i_op->getxattr)
-		goto unlock;
+		return;
 
 	dentry = dget(opt_dentry);
 	if (!dentry) {
 		pr_info("Void dentry: %s : %p (%p)\n", __func__, dentry, opt_dentry);
-		goto unlock;
+		return;
 	}
 
 	rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG, NULL, 0);
@@ -391,8 +366,6 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 
 dput:
 	dput(dentry);
-unlock:
-	mutex_unlock(&isec->lock);
 
 }
 
@@ -400,12 +373,10 @@ static void __blare_regen_inode_sec(struct blare_inode_sec *isec,
 				      const void *value, size_t size)
 {
 	int len = size / sizeof(__s32);
-	if (isec->info.count != BLARE_UNINITIALIZED &&
-	    isec->info.count != 0) {
+	if (tags_initialized(&isec->info))
 		kfree(isec->info.tags);
-	}
 
-	isec->info.count = BLARE_UNINITIALIZED;
+	isec->info.count = 0;
 	isec->info.tags = kmalloc(size, GFP_NOFS);
 	if (!isec->info.tags)
 		return;
@@ -428,9 +399,47 @@ static void blare_inode_post_setxattr(struct dentry *dentry, const char *name,
 	if (!isec)
 		pr_err("Blare: missing inode security structure");
 
-	mutex_lock(&isec->lock);
 	__blare_regen_inode_sec(isec, value, size);
-	mutex_unlock(&isec->lock);
+}
+
+static int blare_mm_dup_security(struct mm_struct *mm, struct mm_struct *oldmm)
+{
+	struct blare_mm_sec *old_msec = oldmm->m_sec;
+	struct blare_mm_sec *msec;
+
+	if (!old_msec) {
+		mm->m_sec = NULL;
+		return 0;
+	}
+
+	msec = kmemdup(old_msec, sizeof(struct blare_mm_sec), GFP_KERNEL);
+	if (!msec)
+		goto nomem;
+	if (old_msec->info.tags) {
+		msec->info.tags = kmemdup(old_msec->info.tags,
+					  sizeof(struct blare_mm_sec), GFP_KERNEL);
+		if (!msec->info.tags) {
+			kfree(msec);
+			goto nomem;
+		}
+	}
+	mm->m_sec = msec;
+	return 0;
+
+nomem:
+	mm->m_sec = NULL;
+	return -ENOMEM;
+}
+
+static void blare_mm_sec_free(struct mm_struct *mm)
+{
+	struct blare_mm_sec *msec = mm->m_sec;
+
+	if (msec) {
+		kfree(msec->info.tags);
+		kfree(msec);
+		mm->m_sec = NULL;
+	}
 }
 
 static struct security_hook_list blare_hooks[] = {
@@ -441,16 +450,16 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(d_instantiate,blare_d_instantiate),
 	LSM_HOOK_INIT(inode_post_setxattr,blare_inode_post_setxattr),
 	LSM_HOOK_INIT(inode_setxattr,blare_inode_setxattr),
+	LSM_HOOK_INIT(inode_removexattr,blare_inode_removexattr),
 	LSM_HOOK_INIT(release_secctx,blare_release_secctx),
 	LSM_HOOK_INIT(bprm_set_creds,blare_bprm_set_creds),
-	LSM_HOOK_INIT(cred_prepare,blare_cred_prepare),
-	LSM_HOOK_INIT(cred_transfer,blare_cred_transfer),
-	LSM_HOOK_INIT(cred_free,blare_cred_free),
-	LSM_HOOK_INIT(cred_alloc_blank,blare_cred_alloc_blank),
+	LSM_HOOK_INIT(bprm_committing_creds,blare_bprm_committing_creds),
 	LSM_HOOK_INIT(file_permission,blare_file_permission),
 	LSM_HOOK_INIT(socket_sendmsg,blare_socket_sendmsg),
 	LSM_HOOK_INIT(socket_recvmsg,blare_socket_recvmsg),
 	LSM_HOOK_INIT(syscall_before_return,unregister_current_flow),
+	LSM_HOOK_INIT(mm_dup_security,blare_mm_dup_security),
+	LSM_HOOK_INIT(mm_sec_free,blare_mm_sec_free),
 };
 
 static int __init blare_install(void)

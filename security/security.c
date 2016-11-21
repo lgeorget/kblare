@@ -26,6 +26,7 @@
 #include <linux/personality.h>
 #include <linux/backing-dev.h>
 #include <net/flow.h>
+#include <linux/mm_types.h>
 
 #define MAX_LSM_EVM_XATTR	2
 
@@ -1552,6 +1553,16 @@ void security_syscall_before_return()
 	call_void_hook(syscall_before_return);
 }
 
+int security_mm_dup_security(struct mm_struct *mm, struct mm_struct *oldmm)
+{
+	return call_int_hook(mm_dup_security, 0, mm, oldmm);
+}
+
+void security_mm_sec_free(struct mm_struct *mm)
+{
+	call_void_hook(mm_sec_free, mm);
+}
+
 struct security_hook_heads security_hook_heads = {
 	.binder_set_context_mgr =
 		LIST_HEAD_INIT(security_hook_heads.binder_set_context_mgr),
@@ -1899,4 +1910,8 @@ struct security_hook_heads security_hook_heads = {
 #endif /* CONFIG_AUDIT */
 	.syscall_before_return =
 		LIST_HEAD_INIT(security_hook_heads.syscall_before_return),
+	.mm_dup_security =
+		LIST_HEAD_INIT(security_hook_heads.mm_dup_security),
+	.mm_sec_free =
+		LIST_HEAD_INIT(security_hook_heads.mm_sec_free),
 };

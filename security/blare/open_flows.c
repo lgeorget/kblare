@@ -21,146 +21,453 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/fsnotify.h>
+#include <linux/hashtable.h>
 
 #include "blare.h"
 
-struct flow;
+#define BLARE_HASHTABLE_SHIFT 10
+#define BLARE_INODE_TYPE 0
+#define BLARE_MM_TYPE 1
 
-
-struct flow {
-	struct list_head open_flows;
+struct discrete_flow {
 	struct task_struct *resp;
-	struct info_tags *src;
-	struct info_tags *dest;
-	struct dentry *dest_dentry;
+	union {
+		struct inode *inode;
+		struct mm_struct *mm;
+	} src;
+	union {
+		struct inode *inode;
+		struct mm_struct *mm;
+	} dest;
+	int type;
+	struct hlist_node by_src; /* table of enabled flows, by source */
+	struct hlist_node by_task; /* table of enabled flows, by responsible task_struct* */
 };
 
-struct node {
-	struct list_head list;
-	struct info_tags *container;
-	struct dentry *container_dentry;
+struct bfs_elt {
+	union {
+		struct inode *inode;
+		struct mm_struct *mm;
+	} src;
+	union {
+		struct inode *inode;
+		struct mm_struct *mm;
+	} dest;
+	int type;
+	struct list_head list; /* list of bfs_elt to visit */
 };
 
-static LIST_HEAD(flows);
+static DEFINE_HASHTABLE(enabled_flows_by_src , BLARE_HASHTABLE_SHIFT);
+static DEFINE_HASHTABLE(enabled_flows_by_task, BLARE_HASHTABLE_SHIFT);
 static DEFINE_MUTEX(flows_lock);
 
-static int visit_next(struct info_tags *ctn, struct dentry *ctn_dentry, struct node *next, struct node *visit_list);
-static int bfs(struct info_tags *src, struct list_head *graph);
-static int generic_add_tags(struct info_tags *dest, struct dentry *dest_dentry, const struct info_tags *src);
-
-
-int register_flow(struct info_tags *dest, struct info_tags *src,
-		  struct dentry *dest_dentry)
+static int get_mms_for_inode(struct inode *inode, struct list_head *visit_list)
 {
-	struct flow *new_flow = kmalloc(sizeof(struct flow), GFP_KERNEL);
-	if (!new_flow)
-		return -ENOMEM;
+	struct address_space *maps = inode->i_mapping;
+	struct vm_area_struct *vma;
+	struct bfs_elt *elt;
+	int ret = 0;
 
-	/* serialize everyone on one big mutex (and fix that some day) */
-	mutex_lock(&flows_lock);
+	i_mmap_lock_read(maps);
+	vma_interval_tree_foreach(vma, &maps->i_mmap, 0, ULONG_MAX)
+	{
+		/* all vma-s are relevant here, we take a ref on the mm and we
+		 * place it on the list of stuff to visit */
+		struct mm_struct *mm = vma->vm_mm;
+		struct blare_mm_sec *msec;
+		if (!mm || !mm->m_sec)
+			continue;
 
-	new_flow->resp = current;
-	new_flow->src = src;
-	new_flow->dest = dest;
-	new_flow->dest_dentry = dest_dentry;
-	list_add(&new_flow->open_flows, &flows);
-	bfs(src,&flows);
+		msec = mm->m_sec;
+		elt = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
+		if (!elt) {
+			ret = -ENOMEM;
+			goto unlock;
+		}
+		atomic_inc(&mm->mm_users);
+		elt->src.inode = inode;
+		elt->dest.mm = mm;
+		elt->type = BLARE_MM_TYPE;
+		list_add_tail(&elt->list, visit_list);
+	}
 
-	mutex_unlock(&flows_lock);
+unlock:
+	i_mmap_unlock_read(maps);
+	return ret;
+}
 
+static int get_inodes_for_mm(struct mm_struct *mm, struct list_head *visit_list)
+{
+	struct vm_area_struct *vma;
+	struct inode *inode;
+	struct bfs_elt *elt;
+	int ret = 0;
+
+	/* only VM_SHARED with a vm_file */
+	down_read(&mm->mmap_sem);
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		if (!(vma->vm_flags & VM_SHARED) || !vma->vm_file)
+			continue;
+
+		inode = vma->vm_file->f_mapping->host;
+		if (!inode || !inode->i_security)
+			continue;
+
+		spin_lock(&inode->i_lock);
+		__iget(inode);
+		spin_unlock(&inode->i_lock);
+		elt = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
+		if (!elt) {
+			ret = -ENOMEM;
+			goto unlock;
+		}
+
+		elt->src.mm = mm;
+		elt->dest.inode = inode;
+		elt->type = BLARE_INODE_TYPE;
+		list_add_tail(&elt->list, visit_list);
+
+	}
+unlock:
+	up_read(&mm->mmap_sem);
+	return ret;
+}
+
+static int get_discrete_flows_for_inode(struct inode *inode, struct list_head *visit_list)
+{
+	struct discrete_flow *flow;
+	struct bfs_elt *elt;
+	u64 key = (u64) inode;
+	pr_debug("kblare: key for inode %llu\n",key);
+	hash_for_each_possible(enabled_flows_by_src, flow, by_src, key) {
+		struct mm_struct *mm;
+		// Check if the flow in the bucket is not for another key
+		if (flow->type != BLARE_MM_TYPE ||
+		    flow->src.inode != inode)
+			continue;
+
+		mm = flow->dest.mm;
+		elt = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
+		if (!elt)
+			return -ENOMEM;
+		atomic_inc(&mm->mm_users);
+		elt->src.inode = inode;
+		elt->dest.mm = mm;
+		elt->type = BLARE_MM_TYPE;
+		list_add_tail(&elt->list, visit_list);
+	}
 	return 0;
 }
 
-void unregister_current_flow()
+static int get_discrete_flows_for_mm(struct mm_struct *mm, struct list_head *visit_list)
 {
-	struct flow *flow, *temp;
-	mutex_lock(&flows_lock);
-	list_for_each_entry_safe(flow, temp, &flows, open_flows) {
-		if (flow->resp == current) {
-			list_del(&flow->open_flows);
-			if (flow->dest_dentry)
-				dput(flow->dest_dentry);
-			kfree(flow);
-		}
+	struct discrete_flow *flow;
+	struct bfs_elt *elt;
+	u64 key = (u64) mm;
+	pr_debug("kblare: key for mm %llu\n",key);
+	hash_for_each_possible(enabled_flows_by_src, flow, by_src, key) {
+		struct inode *inode;
+		// Check if the flow in the bucket is not for another key
+		if (flow->type != BLARE_INODE_TYPE ||
+		    flow->src.mm != mm)
+			continue;
+
+		inode = flow->dest.inode;
+		elt = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
+		if (!elt)
+			return -ENOMEM;
+
+		spin_lock(&inode->i_lock);
+		__iget(inode);
+		spin_unlock(&inode->i_lock);
+		elt->src.mm = mm;
+		elt->dest.inode = inode;
+		elt->type = BLARE_INODE_TYPE;
+		list_add_tail(&elt->list, visit_list);
 	}
-	mutex_unlock(&flows_lock);
+	return 0;
 }
 
-static noinline int visit_next(struct info_tags *ctn, struct dentry *ctn_dentry, struct node *next, struct node *visit_list)
+static int propagate_tags(struct info_tags *dest, struct info_tags *src,
+		    struct info_tags *tags_added)
 {
-	// il faut d'abord vérifier si le nœud n'est pas déjà visité
-	struct node *iter;
-	struct node *new_node;
-	bool ok = true;
-	list_for_each_entry(iter, &visit_list->list, list) {
-		if (iter->container == ctn) {
-			ok = false;
-			break;
-		}
-	}
-	if (!ok)
+	__s32 *tags, *new_dest_tags;
+	tags_added->count = 0;
+	tags_added->tags = NULL;
+
+	if (src->count == 0) {
+		/* no tags in source, exit right away */
 		return 0;
-
-	new_node = (struct node*) kmalloc(sizeof(struct node),
-						       GFP_KERNEL);
-	if (!new_node)
-		return -ENOMEM;
-
-	new_node->container = ctn;
-	new_node->container_dentry = ctn_dentry;
-	list_add_tail(&new_node->list, &visit_list->list);
-
-	return 0;
-}
-
-static noinline int bfs(struct info_tags *src, struct list_head *graph)
-{
-	struct node visit;
-	struct node *next;
-	struct node *first = (struct node*) kmalloc(sizeof(struct node),
-						    GFP_KERNEL);
-	struct flow *iter;
-	int rc;
-
-	if (!first) {
-		pr_err("Blare: couldn't allocate node in BFS");
-		return -ENOMEM;
 	}
-	first->container = src;
-	first->container_dentry = NULL; /* ignored, because we propagate
-					   nothing INTO the src container */
-	next = first;
-//	pr_info("Blare: Starting BFS from %p, container: %p\n", first, first->container);
 
-	rc = 0;
-	INIT_LIST_HEAD(&visit.list);
-	list_add_tail(&first->list, &visit.list);
-	list_for_each_entry(next, &visit.list, list) {
-		list_for_each_entry(iter, graph, open_flows) {
-			if (iter->src == next->container) {
-			//	pr_info("Blare: iter->src matches, propagation into: %p\n",iter->dest);
-			//	if (iter->dest_dentry)
-			//		pr_info("\t... dest is %s\n",iter->dest_dentry->d_name.name);
-				rc = visit_next(iter->dest, iter->dest_dentry, next, &visit);
-				if (rc)
-					goto free_all;
+	if (dest->count == 0) {
+		/* this is the easy case, we can just copy the tags over */
+		tags = kmemdup(src->tags, src->count * sizeof(__s32), GFP_KERNEL);
+		if (!tags)
+			return -ENOMEM;
+		memcpy(tags, src->tags, src->count * sizeof(__s32));
+		dest->tags = tags;
+		dest->count = src->count;
+
+		/* and the set of added tags is precisely the same set too */
+		tags = kmemdup(src->tags, src->count * sizeof(__s32), GFP_KERNEL);
+		if (!tags)
+			return -ENOMEM;
+		memcpy(tags, src->tags, src->count * sizeof(__s32));
+		tags_added->tags = tags;
+		tags_added->count = src->count;
+		return 0;
+	} else {
+		/* we have to merge the new tags with the ones already present
+		 * in the destination container */
+
+		/* First of all, how many new tags are there? */
+		int new_tags_count = 0;
+		int i,j;
+		int last_tag = 0;
+
+		for (i = 0 ; i < src->count ; i++) {
+			for (j = 0 ;
+			     j < dest->count && src->tags[i] != dest->tags[j] ;
+			     j++)
+			{}
+			if (j == dest->count) /* tag is absent */
+				new_tags_count++;
+		}
+
+		if (!new_tags_count) {
+			/* no new tags: fast path */
+			return 0;
+		}
+
+		/* There are some new tags: make room for them and copy them
+		 * over */
+		tags = kmalloc(new_tags_count * sizeof(__s32), GFP_KERNEL);
+		new_dest_tags = kmalloc((new_tags_count + dest->count) * sizeof(__s32), GFP_KERNEL);
+
+		if (!tags || !new_dest_tags)
+			return -ENOMEM;
+
+		for (i = 0 ; i < src->count ; i++) {
+			for (j = 0 ;
+			     j < dest->count && src->tags[i] != dest->tags[j] ;
+			     j++)
+			{}
+			if (j == dest->count) {
+				tags[last_tag++] = src->tags[i];
+
 			}
 		}
-		if (next != first) /* no tags to add into the source */
-			generic_add_tags(next->container, next->container_dentry, src);
+
+		memcpy(new_dest_tags, dest->tags, dest->count * sizeof(__s32));
+		memcpy(&(new_dest_tags[dest->count]), tags, new_tags_count * sizeof(__s32));
+
+		/* all went well, commit */
+		kfree(dest->tags);
+		dest->count += new_tags_count;
+		dest->tags = new_dest_tags;
+		tags_added->count = new_tags_count;
+		tags_added->tags = tags;
 	}
 
-free_all:
-	while (!list_empty(&visit.list)) {
-		next = list_entry(visit.list.next, struct node, list);
+	return 0;
+}
+
+static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, struct info_tags *tags)
+{
+	struct blare_mm_sec *msec = mm->m_sec;
+	struct info_tags new_tags;
+
+	int ret = propagate_tags(&msec->info, tags, &new_tags);
+	if (ret)
+		return ret;
+
+	if (new_tags.count > 0) {
+		ret = get_inodes_for_mm(mm, visit_list);
+		if (!ret)
+			ret = get_discrete_flows_for_mm(mm, visit_list);
+		kfree(new_tags.tags);
+	}
+
+	return ret;
+}
+
+static int propagate_to_inode(struct inode *inode, struct list_head *visit_list, struct info_tags *tags)
+{
+	struct blare_inode_sec *isec = inode->i_security;
+	struct info_tags new_tags;
+
+	int ret = propagate_tags(&isec->info, tags, &new_tags);
+	if (ret)
+		return ret;
+	if (new_tags.count > 0) {
+		ret = get_mms_for_inode(inode, visit_list);
+		if (!ret)
+			ret = get_discrete_flows_for_inode(inode, visit_list);
+		kfree(new_tags.tags);
+	}
+
+	return ret;
+}
+
+static int __register_new_flow(struct bfs_elt *new_flow, struct info_tags *new_tags)
+{
+	LIST_HEAD(visit_list);
+	struct bfs_elt *next, *temp;
+	int ret = 0;
+
+	list_add(&new_flow->list, &visit_list);
+	list_for_each_entry(next, &visit_list, list) {
+		if (next->type == BLARE_INODE_TYPE) {
+			struct inode *inode = next->dest.inode;
+			inode_lock_shared(inode);
+			ret = propagate_to_inode(inode, &visit_list, new_tags);
+			inode_unlock_shared(inode);
+			iput(inode);
+		} else {
+			struct mm_struct *mm = next->dest.mm;
+			ret = propagate_to_mm(mm, &visit_list, new_tags);
+			mmput(mm);
+		}
+
+		if (ret)
+			goto free_all_and_abort;
+	}
+
+free_all_and_abort:
+	list_for_each_entry_safe(next, temp, &visit_list, list) {
 		list_del(&next->list);
 		kfree(next);
 	}
 
-	return rc;
+	return ret;
+
 }
 
+/* called from:
+ * - read
+ * - recv
+ * - mmap
+ */
+static int register_flow_inode_to_mm(struct inode *inode, struct mm_struct *mm)
+{
+	struct blare_inode_sec *isec = inode->i_security;
+	struct bfs_elt *first_flow;
 
+	if (!isec || !mm->m_sec || !tags_initialized(&isec->info))
+		return 0;
+
+	first_flow = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
+	if (!first_flow)
+		return -ENOMEM;
+
+	atomic_inc(&mm->mm_users);
+	first_flow->src.inode = inode;
+	first_flow->dest.mm = mm;
+	first_flow->type = BLARE_MM_TYPE;
+	return __register_new_flow(first_flow, &isec->info);
+}
+
+/* called from:
+ * - write
+ * - send
+ */
+static int register_flow_mm_to_inode(struct mm_struct *mm, struct inode *inode)
+{
+	struct blare_mm_sec *msec = mm->m_sec;
+	struct bfs_elt *first_flow;
+
+	if (!msec || !inode->i_security || !tags_initialized(&msec->info))
+		return 0;
+
+	first_flow = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
+	if (!first_flow)
+		return -ENOMEM;
+
+	spin_lock(&inode->i_lock);
+	__iget(inode);
+	spin_unlock(&inode->i_lock);
+	first_flow->src.mm = mm;
+	first_flow->dest.inode = inode;
+	first_flow->type = BLARE_INODE_TYPE;
+	return __register_new_flow(first_flow, &msec->info);
+}
+
+/* other flows to cover: clone (and fork...) */
+
+int register_read(struct inode *inode)
+{
+	int ret = 0;
+	struct mm_struct *mm = current->mm;
+	struct discrete_flow *flow = kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
+
+	if (!flow)
+		return -ENOMEM;
+
+	flow->resp = current;
+	flow->src.inode = inode;
+	flow->dest.mm = mm;
+	flow->type = BLARE_MM_TYPE;
+	INIT_HLIST_NODE(&flow->by_src);
+	INIT_HLIST_NODE(&flow->by_task);
+
+	mutex_lock(&flows_lock);
+	pr_debug("kblare: key for inode insertion %llu\n", (u64) inode);
+	hash_add(enabled_flows_by_src, &flow->by_src, ((u64) inode));
+	hash_add(enabled_flows_by_task, &flow->by_task, ((u64) current));
+	ret = register_flow_inode_to_mm(inode, mm);
+	mutex_unlock(&flows_lock);
+
+	return ret;
+}
+
+int register_write(struct inode *inode)
+{
+	int ret = 0;
+	struct mm_struct *mm = current->mm;
+
+	struct discrete_flow *flow = kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
+
+	if (!flow)
+		return -ENOMEM;
+
+	flow->resp = current;
+	flow->src.mm = mm;
+	flow->dest.inode = inode;
+	flow->type = BLARE_INODE_TYPE;
+	INIT_HLIST_NODE(&flow->by_src);
+	INIT_HLIST_NODE(&flow->by_task);
+
+	mutex_lock(&flows_lock);
+	pr_debug("kblare: key for mm insertion %llu\n", (u64) mm);
+	hash_add(enabled_flows_by_src, &flow->by_src, ((u64) mm));
+	hash_add(enabled_flows_by_task, &flow->by_task, ((u64) current));
+	ret = register_flow_mm_to_inode(mm, inode);
+	mutex_unlock(&flows_lock);
+
+	return ret;
+}
+
+void unregister_current_flow(void)
+{
+	struct discrete_flow *flow;
+	mutex_lock(&flows_lock);
+	hash_for_each_possible(enabled_flows_by_task, flow, by_task, ((u64) current)) {
+		if (flow->resp == current) {
+			if (flow->type == BLARE_MM_TYPE)
+				pr_debug("kblare: removing inode key %llu\n", (u64) flow->src.inode);
+			else
+				pr_debug("kblare: removing mm key %llu\n", (u64) flow->src.mm);
+			hash_del(&flow->by_task);
+			hash_del(&flow->by_src);
+			kfree(flow);
+			break;
+		}
+	}
+	mutex_unlock(&flows_lock);
+}
+
+#if 0
 static noinline int generic_add_tags(struct info_tags *dest, struct dentry *dest_dentry, const struct info_tags *src)
 {
 	int rc;
@@ -186,9 +493,8 @@ static noinline int generic_add_tags(struct info_tags *dest, struct dentry *dest
 				fsnotify_xattr(dest_dentry);
 			inode_unlock(inode);
 		}
-		/* dput(dentry); */
 	}
-commit:
+
 	if (rc >= 0) { /* the new tags have been computed and propagated into the
 		      inode's xattr, if required. Time to commit the changes */
 		__s32 *old_tags = dest->tags;
@@ -199,92 +505,5 @@ commit:
 
 	 return rc;
 }
-
-/**
- * Add the tags of src to the ones in dest, without duplicates. There should be
- * no dumplicates in dest and src. The result is stored in new_tags.
- * The caller may pass dest as new_tags. In any case, the method will leave
- * dest unchanged if the return code is different from 0.
- * If all tags in src were already in dest, the method returns an EMPTY
- * new_tags (count = 0 and no allocation done).
- * @dest the destination security structure
- * @src the source security structure
- * @new_tags the result of the merging of the tags in src and dest
- */
-int add_tags(const struct info_tags* dest, const struct info_tags* src,
-	     struct info_tags* new_tags)
-{
-	__s32 *tags;
-
-	if (src->count == BLARE_UNINITIALIZED || src->count == 0) {
-		/* no tags in source, exit right away */
-		new_tags->count = 0;
-		new_tags->tags = NULL;
-		return 0;
-	}
-
-	if (dest->count == BLARE_UNINITIALIZED || dest->count == 0) {
-		/* this is the easy case, we can just copy the tags over */
-		tags = kmemdup(src->tags, src->count * sizeof(__s32), GFP_KERNEL);
-		if (!tags)
-			return -ENOMEM;
-		memcpy(tags, src->tags, src->count * sizeof(__s32));
-		new_tags->tags = tags;
-		new_tags->count = src->count;
-		return src->count;
-	} else {
-		/* we have to merge the new tags with the ones already present
-		 * in the destination container */
-
-		/* First of all, how many new tags are there? */
-		int new_count = (dest->count == BLARE_UNINITIALIZED) ?
-			0 : dest->count;
-		int i,j;
-		int last_tag;
-		int ret;
-
-		for (i = 0 ; i < src->count ; i++) {
-			for (j = 0 ;
-			     j < dest->count && src->tags[i] != dest->tags[j] ;
-			     j++)
-			{}
-			if (j == dest->count) /* tag is absent */
-				new_count++;
-		}
-
-		ret = new_count - dest->count;
-		if (!ret) {
-			/* no new tags: fast path */
-			new_tags->count = 0;
-			new_tags->tags = NULL;
-			return 0;
-		}
-
-		/* There are some new tags: make room for them and copy them
-		 * over */
-		tags = kmalloc(new_count * sizeof(__s32), GFP_KERNEL);
-		memcpy(tags, dest->tags, dest->count * sizeof(__s32));
-
-		if (!tags)
-			return -ENOMEM;
-
-		last_tag = dest->count;
-
-		for (i = 0 ; i < src->count ; i++) {
-			for (j = 0 ;
-			     j < dest->count && src->tags[i] != dest->tags[j] ;
-			     j++)
-			{}
-			if (j == dest->count)
-				tags[last_tag++] = src->tags[i];
-		}
-
-		if (new_tags == dest) /* the caller wants to replace dest */
-			kfree(dest->tags);
-
-		new_tags->count = new_count;
-		new_tags->tags = tags;
-
-		return ret;
-	}
 }
+#endif

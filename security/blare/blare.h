@@ -16,12 +16,11 @@
 #include <linux/xattr.h>
 #include <linux/types.h>
 #include <linux/mutex.h>
+#include <linux/fs.h>
 
 #define BLARE_XATTR_TAG_SUFFIX "blare.tag"
 #define BLARE_XATTR_TAG XATTR_SECURITY_PREFIX BLARE_XATTR_TAG_SUFFIX
 #define BLARE_XATTR_TAG_LEN (sizeof(BLARE_XATTR_TAG) - 1);
-
-#define BLARE_UNINITIALIZED (-1)
 
 struct info_tags {
 	int count;
@@ -30,7 +29,6 @@ struct info_tags {
 
 struct blare_inode_sec {
 	struct info_tags info;
-	struct mutex lock;
 };
 
 struct blare_task_sec {
@@ -38,8 +36,14 @@ struct blare_task_sec {
 	struct mutex lock;
 };
 
-int register_flow(struct info_tags *dest, struct info_tags *src,
-		  struct dentry *dest_dentry);
+struct blare_mm_sec {
+	struct info_tags info;
+};
+
+int register_read(struct inode *inode);
+int register_write(struct inode *inode);
 void unregister_current_flow(void);
-int add_tags(const struct info_tags* dest, const struct info_tags* src,
-	     struct info_tags* new_tags);
+
+static inline bool tags_initialized(struct info_tags *tags) {
+	return !!(tags->tags);
+}
