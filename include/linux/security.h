@@ -1136,6 +1136,13 @@ static inline int security_inode_getsecctx(struct inode *inode, void **ctx, u32 
 static inline void security_syscall_before_return()
 {
 }
+static inline int security_mm_dup_security(struct mm_struct *mm, struct mm_struct *oldmm)
+{
+	return 0;
+}
+void security_mm_sec_free(struct mm_struct *mm)
+{
+}
 #endif	/* CONFIG_SECURITY */
 
 #ifdef CONFIG_SECURITY_NETWORK
