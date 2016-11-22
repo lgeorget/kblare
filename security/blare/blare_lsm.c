@@ -226,7 +226,7 @@ static int blare_file_permission(struct file *file, int mask)
 	if (mask & MAY_READ) {
 		path = d_path(&file->f_path, pathbuffer, 256);
 		pr_debug("kblare reading %s\n", path);
-		ret = register_read(inode);
+		ret = register_read(file);
 	}
 
 	if (!ret && (mask & MAY_APPEND || mask & MAY_WRITE)) {
@@ -234,7 +234,7 @@ static int blare_file_permission(struct file *file, int mask)
 		dget(dentry);*/
 		path = d_path(&file->f_path, pathbuffer, 256);
 		pr_debug("kblare writing %s\n", path);
-		ret = register_write(inode);
+		ret = register_write(file);
 	}
 
 	return ret;
@@ -242,6 +242,7 @@ static int blare_file_permission(struct file *file, int mask)
 
 static int blare_socket_sendmsg(struct socket *socket, struct msghdr *msg, int size)
 {
+	struct file *file = socket->file;
 	struct inode *inode = SOCK_INODE(socket);
 	struct blare_inode_sec *isec = inode->i_security;
 	struct blare_mm_sec *msec;
@@ -255,11 +256,12 @@ static int blare_socket_sendmsg(struct socket *socket, struct msghdr *msg, int s
 
 	/* Conceptually, the communication channel bears the security label,
 	 * in practice, the sending end stores the security attributes */
-	return register_write(inode);
+	return register_write(file);
 }
 
 static int blare_socket_recvmsg(struct socket *socket, struct msghdr *msg, int size, int flags)
 {
+	struct file *file;
 	struct inode *inode;
 	struct blare_inode_sec *isec;
 	struct blare_mm_sec *msec;
@@ -285,12 +287,13 @@ static int blare_socket_recvmsg(struct socket *socket, struct msghdr *msg, int s
 			goto put_sock;
 		}
 		inode = SOCK_INODE(peer->sk_socket);
+		file = peer->sk_socket->file;
 		unix_state_unlock(peer);
 		isec = inode->i_security;
 		if (!isec)
 			goto put_sock;
 
-		rc = register_read(inode);
+		rc = register_read(file);
 put_sock:
 		sock_put(peer);
 	} /* else ? */

@@ -26,17 +26,17 @@
 #include "blare.h"
 
 #define BLARE_HASHTABLE_SHIFT 10
-#define BLARE_INODE_TYPE 0
+#define BLARE_FILE_TYPE 0
 #define BLARE_MM_TYPE 1
 
 struct discrete_flow {
 	struct task_struct *resp;
 	union {
-		struct inode *inode;
+		struct file *file;
 		struct mm_struct *mm;
 	} src;
 	union {
-		struct inode *inode;
+		struct file *file;
 		struct mm_struct *mm;
 	} dest;
 	int type;
@@ -46,11 +46,11 @@ struct discrete_flow {
 
 struct bfs_elt {
 	union {
-		struct inode *inode;
+		struct file *file;
 		struct mm_struct *mm;
 	} src;
 	union {
-		struct inode *inode;
+		struct file *file;
 		struct mm_struct *mm;
 	} dest;
 	int type;
@@ -61,8 +61,9 @@ static DEFINE_HASHTABLE(enabled_flows_by_src , BLARE_HASHTABLE_SHIFT);
 static DEFINE_HASHTABLE(enabled_flows_by_task, BLARE_HASHTABLE_SHIFT);
 static DEFINE_MUTEX(flows_lock);
 
-static int get_mms_for_inode(struct inode *inode, struct list_head *visit_list)
+static int get_mms_for_file(struct file *file, struct list_head *visit_list)
 {
+	struct inode *inode = file_inode(file);
 	struct address_space *maps = inode->i_mapping;
 	struct vm_area_struct *vma;
 	struct bfs_elt *elt;
@@ -85,7 +86,7 @@ static int get_mms_for_inode(struct inode *inode, struct list_head *visit_list)
 			goto unlock;
 		}
 		atomic_inc(&mm->mm_users);
-		elt->src.inode = inode;
+		elt->src.file = file;
 		elt->dest.mm = mm;
 		elt->type = BLARE_MM_TYPE;
 		list_add_tail(&elt->list, visit_list);
@@ -96,10 +97,10 @@ unlock:
 	return ret;
 }
 
-static int get_inodes_for_mm(struct mm_struct *mm, struct list_head *visit_list)
+static int get_files_for_mm(struct mm_struct *mm, struct list_head *visit_list)
 {
 	struct vm_area_struct *vma;
-	struct inode *inode;
+	struct file *file;
 	struct bfs_elt *elt;
 	int ret = 0;
 
@@ -109,22 +110,20 @@ static int get_inodes_for_mm(struct mm_struct *mm, struct list_head *visit_list)
 		if (!(vma->vm_flags & VM_SHARED) || !vma->vm_file)
 			continue;
 
-		inode = vma->vm_file->f_mapping->host;
-		if (!inode || !inode->i_security)
+		file = vma->vm_file;
+		if (!file_inode(file) || !file_inode(file)->i_security)
 			continue;
 
-		spin_lock(&inode->i_lock);
-		__iget(inode);
-		spin_unlock(&inode->i_lock);
 		elt = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
 		if (!elt) {
 			ret = -ENOMEM;
 			goto unlock;
 		}
 
+		get_file(file);
 		elt->src.mm = mm;
-		elt->dest.inode = inode;
-		elt->type = BLARE_INODE_TYPE;
+		elt->dest.file = file;
+		elt->type = BLARE_FILE_TYPE;
 		list_add_tail(&elt->list, visit_list);
 
 	}
@@ -133,17 +132,18 @@ unlock:
 	return ret;
 }
 
-static int get_discrete_flows_for_inode(struct inode *inode, struct list_head *visit_list)
+static int get_discrete_flows_for_file(struct file *file, struct list_head *visit_list)
 {
 	struct discrete_flow *flow;
 	struct bfs_elt *elt;
+	struct inode *inode = file_inode(file);
 	u64 key = (u64) inode;
 	pr_debug("kblare: key for inode %llu\n",key);
 	hash_for_each_possible(enabled_flows_by_src, flow, by_src, key) {
 		struct mm_struct *mm;
 		// Check if the flow in the bucket is not for another key
 		if (flow->type != BLARE_MM_TYPE ||
-		    flow->src.inode != inode)
+		    file_inode(flow->src.file) != inode)
 			continue;
 
 		mm = flow->dest.mm;
@@ -151,7 +151,7 @@ static int get_discrete_flows_for_inode(struct inode *inode, struct list_head *v
 		if (!elt)
 			return -ENOMEM;
 		atomic_inc(&mm->mm_users);
-		elt->src.inode = inode;
+		elt->src.file = file;
 		elt->dest.mm = mm;
 		elt->type = BLARE_MM_TYPE;
 		list_add_tail(&elt->list, visit_list);
@@ -166,23 +166,21 @@ static int get_discrete_flows_for_mm(struct mm_struct *mm, struct list_head *vis
 	u64 key = (u64) mm;
 	pr_debug("kblare: key for mm %llu\n",key);
 	hash_for_each_possible(enabled_flows_by_src, flow, by_src, key) {
-		struct inode *inode;
+		struct file *file;
 		// Check if the flow in the bucket is not for another key
-		if (flow->type != BLARE_INODE_TYPE ||
+		if (flow->type != BLARE_FILE_TYPE ||
 		    flow->src.mm != mm)
 			continue;
 
-		inode = flow->dest.inode;
+		file = flow->dest.file;
 		elt = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
 		if (!elt)
 			return -ENOMEM;
 
-		spin_lock(&inode->i_lock);
-		__iget(inode);
-		spin_unlock(&inode->i_lock);
+		get_file(file);
 		elt->src.mm = mm;
-		elt->dest.inode = inode;
-		elt->type = BLARE_INODE_TYPE;
+		elt->dest.file = file;
+		elt->type = BLARE_FILE_TYPE;
 		list_add_tail(&elt->list, visit_list);
 	}
 	return 0;
@@ -283,7 +281,7 @@ static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, s
 		return ret;
 
 	if (new_tags.count > 0) {
-		ret = get_inodes_for_mm(mm, visit_list);
+		ret = get_files_for_mm(mm, visit_list);
 		if (!ret)
 			ret = get_discrete_flows_for_mm(mm, visit_list);
 		kfree(new_tags.tags);
@@ -292,8 +290,9 @@ static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, s
 	return ret;
 }
 
-static int propagate_to_inode(struct inode *inode, struct list_head *visit_list, struct info_tags *tags)
+static int propagate_to_file(struct file *file, struct list_head *visit_list, struct info_tags *tags)
 {
+	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
 	struct info_tags new_tags;
 
@@ -301,9 +300,28 @@ static int propagate_to_inode(struct inode *inode, struct list_head *visit_list,
 	if (ret)
 		return ret;
 	if (new_tags.count > 0) {
-		ret = get_mms_for_inode(inode, visit_list);
+		struct dentry *dentry = dget(file_dentry(file));
+		if (dentry && inode->i_op->setxattr) {
+			int rc;
+			/* Convert the shared lock into an exclusive lock
+			 * no race condition to be afraid of because the entire
+			 * tag propagation is protected by mutex flows_lock
+			 * and we have a reference on the inode */
+			inode_unlock(inode);
+			inode_lock(inode);
+			rc = inode->i_op->setxattr(dentry, inode,
+				BLARE_XATTR_TAG, isec->info.tags,
+				isec->info.count * sizeof(__s32), 0);
+			if (!rc)
+				fsnotify_xattr(dentry);
+			inode_unlock(inode);
+			inode_lock_shared(inode);
+		}
+		dput(dentry);
+
+		ret = get_mms_for_file(file, visit_list);
 		if (!ret)
-			ret = get_discrete_flows_for_inode(inode, visit_list);
+			ret = get_discrete_flows_for_file(file, visit_list);
 		kfree(new_tags.tags);
 	}
 
@@ -318,12 +336,13 @@ static int __register_new_flow(struct bfs_elt *new_flow, struct info_tags *new_t
 
 	list_add(&new_flow->list, &visit_list);
 	list_for_each_entry(next, &visit_list, list) {
-		if (next->type == BLARE_INODE_TYPE) {
-			struct inode *inode = next->dest.inode;
+		if (next->type == BLARE_FILE_TYPE) {
+			struct file *file = next->dest.file;
+			struct inode *inode = file_inode(file);
 			inode_lock_shared(inode);
-			ret = propagate_to_inode(inode, &visit_list, new_tags);
+			ret = propagate_to_file(file, &visit_list, new_tags);
 			inode_unlock_shared(inode);
-			iput(inode);
+			fput(file);
 		} else {
 			struct mm_struct *mm = next->dest.mm;
 			ret = propagate_to_mm(mm, &visit_list, new_tags);
@@ -349,8 +368,9 @@ free_all_and_abort:
  * - recv
  * - mmap
  */
-static int register_flow_inode_to_mm(struct inode *inode, struct mm_struct *mm)
+static int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 {
+	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
 	struct bfs_elt *first_flow;
 
@@ -362,7 +382,7 @@ static int register_flow_inode_to_mm(struct inode *inode, struct mm_struct *mm)
 		return -ENOMEM;
 
 	atomic_inc(&mm->mm_users);
-	first_flow->src.inode = inode;
+	first_flow->src.file = file;
 	first_flow->dest.mm = mm;
 	first_flow->type = BLARE_MM_TYPE;
 	return __register_new_flow(first_flow, &isec->info);
@@ -372,8 +392,9 @@ static int register_flow_inode_to_mm(struct inode *inode, struct mm_struct *mm)
  * - write
  * - send
  */
-static int register_flow_mm_to_inode(struct mm_struct *mm, struct inode *inode)
+static int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 {
+	struct inode *inode = file_inode(file);
 	struct blare_mm_sec *msec = mm->m_sec;
 	struct bfs_elt *first_flow;
 
@@ -384,28 +405,27 @@ static int register_flow_mm_to_inode(struct mm_struct *mm, struct inode *inode)
 	if (!first_flow)
 		return -ENOMEM;
 
-	spin_lock(&inode->i_lock);
-	__iget(inode);
-	spin_unlock(&inode->i_lock);
+	get_file(file);
 	first_flow->src.mm = mm;
-	first_flow->dest.inode = inode;
-	first_flow->type = BLARE_INODE_TYPE;
+	first_flow->dest.file = file;
+	first_flow->type = BLARE_FILE_TYPE;
 	return __register_new_flow(first_flow, &msec->info);
 }
 
 /* other flows to cover: clone (and fork...) */
 
-int register_read(struct inode *inode)
+int register_read(struct file *file)
 {
 	int ret = 0;
 	struct mm_struct *mm = current->mm;
+	struct inode *inode =file_inode(file);
 	struct discrete_flow *flow = kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
 
 	if (!flow)
 		return -ENOMEM;
 
 	flow->resp = current;
-	flow->src.inode = inode;
+	flow->src.file = file;
 	flow->dest.mm = mm;
 	flow->type = BLARE_MM_TYPE;
 	INIT_HLIST_NODE(&flow->by_src);
@@ -415,13 +435,13 @@ int register_read(struct inode *inode)
 	pr_debug("kblare: key for inode insertion %llu\n", (u64) inode);
 	hash_add(enabled_flows_by_src, &flow->by_src, ((u64) inode));
 	hash_add(enabled_flows_by_task, &flow->by_task, ((u64) current));
-	ret = register_flow_inode_to_mm(inode, mm);
+	ret = register_flow_file_to_mm(file, mm);
 	mutex_unlock(&flows_lock);
 
 	return ret;
 }
 
-int register_write(struct inode *inode)
+int register_write(struct file *file)
 {
 	int ret = 0;
 	struct mm_struct *mm = current->mm;
@@ -433,8 +453,8 @@ int register_write(struct inode *inode)
 
 	flow->resp = current;
 	flow->src.mm = mm;
-	flow->dest.inode = inode;
-	flow->type = BLARE_INODE_TYPE;
+	flow->dest.file = file;
+	flow->type = BLARE_FILE_TYPE;
 	INIT_HLIST_NODE(&flow->by_src);
 	INIT_HLIST_NODE(&flow->by_task);
 
@@ -442,7 +462,7 @@ int register_write(struct inode *inode)
 	pr_debug("kblare: key for mm insertion %llu\n", (u64) mm);
 	hash_add(enabled_flows_by_src, &flow->by_src, ((u64) mm));
 	hash_add(enabled_flows_by_task, &flow->by_task, ((u64) current));
-	ret = register_flow_mm_to_inode(mm, inode);
+	ret = register_flow_mm_to_file(mm, file);
 	mutex_unlock(&flows_lock);
 
 	return ret;
@@ -455,7 +475,7 @@ void unregister_current_flow(void)
 	hash_for_each_possible(enabled_flows_by_task, flow, by_task, ((u64) current)) {
 		if (flow->resp == current) {
 			if (flow->type == BLARE_MM_TYPE)
-				pr_debug("kblare: removing inode key %llu\n", (u64) flow->src.inode);
+				pr_debug("kblare: removing inode key %llu\n", (u64) file_inode(flow->src.file));
 			else
 				pr_debug("kblare: removing mm key %llu\n", (u64) flow->src.mm);
 			hash_del(&flow->by_task);

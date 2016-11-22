@@ -40,8 +40,8 @@ struct blare_mm_sec {
 	struct info_tags info;
 };
 
-int register_read(struct inode *inode);
-int register_write(struct inode *inode);
+int register_read(struct file *file);
+int register_write(struct file *file);
 void unregister_current_flow(void);
 
 static inline bool tags_initialized(struct info_tags *tags) {
