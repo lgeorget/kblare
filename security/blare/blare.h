@@ -29,16 +29,13 @@ struct info_tags {
 	__s32 *tags;
 };
 
-/* All the following structures are identical but it's useful to keep them
- * separated to benefit for readability and typing. Furthermore, we will need
- * to add a mutex or a counter in these structures when we make the big
- * flows_lock mutex disappear. */
 struct blare_inode_sec {
 	struct info_tags info;
 };
 
 struct blare_mm_sec {
 	struct info_tags info;
+	atomic_t users;
 };
 
 struct blare_msg_sec {
@@ -48,7 +45,13 @@ struct blare_msg_sec {
 int register_read(struct file *file);
 int register_write(struct file *file);
 int register_msg_reception(struct msg_msg *msg);
+int register_ptrace_attach(struct task_struct *tracer,
+			   struct task_struct *child);
 void unregister_current_flow(void);
+void unregister_ptrace(struct task_struct *child);
+struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec);
+void msec_get(struct blare_mm_sec *msec);
+void msec_put(struct blare_mm_sec *msec);
 
 static inline bool tags_initialized(struct info_tags *tags) {
 	return !!(tags->tags);

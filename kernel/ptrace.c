@@ -77,6 +77,7 @@ void __ptrace_unlink(struct task_struct *child)
 	list_del_init(&child->ptrace_entry);
 
 	spin_lock(&child->sighand->siglock);
+	security_ptrace_unlink(child);
 	child->ptrace = 0;
 	/*
 	 * Clear all pending traps and TRAPPING.  TRAPPING should be
@@ -108,6 +109,7 @@ void __ptrace_unlink(struct task_struct *child)
 	/*
 	 * If transition to TASK_STOPPED is pending or in TASK_TRACED, kick
 	 * @child in the butt.  Note that @resume should be used iff @child
+	 * b
 	 * is in TASK_TRACED; otherwise, we might unduly disrupt
 	 * TASK_KILLABLE sleeps.
 	 */
@@ -126,7 +128,7 @@ static bool ptrace_freeze_traced(struct task_struct *task)
 	if (task->jobctl & JOBCTL_LISTENING)
 		return ret;
 
-	spin_lock_irq(&task->sighand->siglock);
+		spin_lock_irq(&task->sighand->siglock);
 	if (task_is_traced(task) && !__fatal_signal_pending(task)) {
 		task->state = __TASK_TRACED;
 		ret = true;
@@ -479,6 +481,7 @@ static bool __ptrace_detach(struct task_struct *tracer, struct task_struct *p)
 	/* Mark it as in the process of being reaped. */
 	if (dead)
 		p->exit_state = EXIT_DEAD;
+
 	return dead;
 }
 
@@ -1071,7 +1074,7 @@ static struct task_struct *ptrace_get_task_struct(pid_t pid)
 	return child;
 }
 
-#ifndef arch_ptrace_attach
+#ifndef arch_trace_attach
 #define arch_ptrace_attach(child)	do { } while (0)
 #endif
 

@@ -536,6 +536,73 @@ void unregister_current_flow(void)
 	mutex_unlock(&flows_lock);
 }
 
+int register_ptrace_attach(struct task_struct *tracer, struct task_struct *child)
+{
+	struct mm_struct *child_mm = child->mm;
+	struct blare_mm_sec *child_msec = child_mm->m_sec;
+	struct blare_mm_sec *tracer_msec = tracer->mm->m_sec;
+	/* we do the m_sec shring under mutex in order not to propagate tags
+	 * inconsistently if the old m_sec is being used */
+	mutex_lock(&flows_lock);
+	msec_put(child_msec);
+	msec_get(tracer_msec);
+	child_mm->m_sec = tracer_msec;
+	mutex_unlock(&flows_lock);
+
+	return 0;
+}
+
+void unregister_ptrace(struct task_struct *child)
+{
+	struct mm_struct *child_mm = child->mm;
+	struct blare_mm_sec *tracer_msec = current->mm->m_sec;
+	/* we do the m_sec shring under mutex in order not to propagate tags
+	 * inconsistently if the old m_sec is being used */
+	mutex_lock(&flows_lock);
+	child_mm->m_sec = dup_msec(tracer_msec);
+	/* Ups, no more memory but no way to return an error :/
+	 * we will proceed as if the caller had ask for the tracee to be killed
+	 * on detaching */
+	if (IS_ERR(child_mm->m_sec))
+		send_sig_info(SIGKILL, SEND_SIG_FORCED, child);
+	msec_put(tracer_msec);
+	mutex_unlock(&flows_lock);
+}
+
+struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec)
+{
+	struct blare_mm_sec *msec;
+	msec = kmemdup(old_msec, sizeof(struct blare_mm_sec), GFP_KERNEL);
+	if (!msec)
+		goto nomem;
+	if (old_msec->info.tags) {
+		msec->info.tags = kmemdup(old_msec->info.tags,
+					  sizeof(struct blare_mm_sec), GFP_KERNEL);
+		if (!msec->info.tags) {
+			kfree(msec);
+			goto nomem;
+		}
+	}
+	atomic_set(&msec->users, 1);
+	return msec;
+
+nomem:
+	return ERR_PTR(-ENOMEM);
+}
+
+void msec_get(struct blare_mm_sec *msec)
+{
+	atomic_inc(&msec->users);
+}
+
+void msec_put(struct blare_mm_sec *msec)
+{
+	if (atomic_dec_and_test(&msec->users)) {
+		kfree(msec->info.tags);
+		kfree(msec);
+	}
+}
+
 #if 0
 static noinline int generic_add_tags(struct info_tags *dest, struct dentry *dest_dentry, const struct info_tags *src)
 {

@@ -65,6 +65,7 @@ static int blare_bprm_set_creds(struct linux_binprm *bprm)
 		msec->info.count = 0;
 		msec->info.tags = NULL;
 	}
+	atomic_set(&msec->users, 1);
 	bprm->cred->security = msec;
 
 	return 0;
@@ -410,28 +411,16 @@ static int blare_mm_dup_security(struct mm_struct *mm, struct mm_struct *oldmm)
 	struct blare_mm_sec *old_msec = oldmm->m_sec;
 	struct blare_mm_sec *msec;
 
-	if (!old_msec) {
-		mm->m_sec = NULL;
+	mm->m_sec = NULL;
+	if (!old_msec)
 		return 0;
-	}
 
-	msec = kmemdup(old_msec, sizeof(struct blare_mm_sec), GFP_KERNEL);
-	if (!msec)
-		goto nomem;
-	if (old_msec->info.tags) {
-		msec->info.tags = kmemdup(old_msec->info.tags,
-					  sizeof(struct blare_mm_sec), GFP_KERNEL);
-		if (!msec->info.tags) {
-			kfree(msec);
-			goto nomem;
-		}
-	}
+	msec = dup_msec(old_msec);
+	if (IS_ERR(msec))
+		return PTR_ERR(msec);
+
 	mm->m_sec = msec;
 	return 0;
-
-nomem:
-	mm->m_sec = NULL;
-	return -ENOMEM;
 }
 
 static void blare_mm_sec_free(struct mm_struct *mm)
@@ -439,19 +428,22 @@ static void blare_mm_sec_free(struct mm_struct *mm)
 	struct blare_mm_sec *msec = mm->m_sec;
 
 	if (msec) {
-		kfree(msec->info.tags);
-		kfree(msec);
+		msec_put(msec);
 		mm->m_sec = NULL;
 	}
 }
 
 static int blare_mq_store_msg(struct msg_msg *msg)
 {
+	int ret;
 	struct blare_mm_sec *msec = mm->m_sec;
 	if (!msec || !msg->security)
 		return 0;
 
-	return register_mq_reception(msg);
+	ret = register_mq_reception(msg);
+	syscall_before_return(); /* the flow is atomic because at this point it
+				    has already occurred */
+	return ret;
 }
 
 static int blare_msg_msg_alloc_security(struct msg_msg *msg)
@@ -493,6 +485,43 @@ static void blare_msg_msg_free_security(struct msg_msg *msg)
 	}
 }
 
+static int blare_ptrace_access_check(struct task_struct *child,
+				     unsigned int /* mode */)
+{
+	struct blare_mm_sec *tracer_msec = current->mm->m_sec;
+	struct blare_mm_sec *child_msec = child->mm->m_sec;
+
+	if (!tracer_msec || !child_msec)
+		return 0;
+
+	return register_ptrace_attach(current, child);
+}
+
+static int blare_ptrace_traceme(struct task_struct *parent)
+{
+	struct blare_mm_sec *tracer_msec = parent->mm->m_sec;
+	struct blare_mm_sec *child_msec = current->mm->m_sec;
+
+	if (!tracer_msec || !child_msec)
+		return 0;
+
+	return register_ptrace_attach(parent, current);
+}
+
+static void blare_ptrace_unlink(struct task_struct *child)
+{
+	struct blare_mm_sec *child_msec = child->mm->m_sec;
+
+	if (!child_msec)
+		return;
+
+	/* don't bother detaching the mm->m_sec if the child won't use it */
+	if (child->flags & PF_EXITING)
+		return;
+
+	unregister_ptrace(child);
+}
+
 static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(inode_alloc_security,blare_inode_alloc_security),
 	LSM_HOOK_INIT(inode_free_security,blare_inode_free_security),
@@ -514,6 +543,9 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(mq_store_msg,blare_mq_store_msg),
 	LSM_HOOK_INIT(msg_msg_alloc_security,blare_msg_msg_alloc_security),
 	LSM_HOOK_INIT(msg_msg_free_security,blare_msg_msg_free_security),
+	LSM_HOOK_INIT(ptrace_access_check,blare_ptrace_access_check),
+	LSM_HOOK_INIT(ptrace_traceme,blare_ptrace_traceme),
+	LSM_HOOK_INIT(ptrace_unlink,blare_ptrace_unlink),
 };
 
 static int __init blare_install(void)

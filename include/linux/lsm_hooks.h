@@ -1624,6 +1624,7 @@ union security_list_options {
 	int (*mm_dup_security)(struct mm_struct *mm, struct mm_struct *oldmm);
 	void (*mm_sec_free)(struct mm_struct *mm);
 	int (*mq_store_msg)(struct msg_msg *msg);
+	void (*ptrace_unlink)(struct task_struct *p);
 };
 
 struct security_hook_heads {
@@ -1839,6 +1840,7 @@ struct security_hook_heads {
 	struct list_head mm_dup_security;
 	struct list_head mm_sec_free;
 	struct list_head mq_store_msg;
+	struct list_head ptrace_unlink;
 };
 
 /*
