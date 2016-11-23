@@ -12,6 +12,8 @@
  * published by the Free Software Foundation.
  *
  */
+#ifndef _BLARE_H
+#define _BLARE_H
 
 #include <linux/xattr.h>
 #include <linux/types.h>
@@ -56,3 +58,5 @@ void msec_put(struct blare_mm_sec *msec);
 static inline bool tags_initialized(struct info_tags *tags) {
 	return !!(tags->tags);
 }
+
+#endif // _BLARE_H
