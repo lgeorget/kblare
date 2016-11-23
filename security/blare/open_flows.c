@@ -543,9 +543,9 @@ int register_ptrace_attach(struct task_struct *tracer, struct task_struct *child
 	/* we do the m_sec shring under mutex in order not to propagate tags
 	 * inconsistently if the old m_sec is being used */
 	mutex_lock(&flows_lock);
-	msec_put(child_msec);
 	msec_get(tracer_msec);
 	child_mm->m_sec = tracer_msec;
+	msec_put(child_msec);
 	mutex_unlock(&flows_lock);
 
 	return 0;
@@ -562,8 +562,10 @@ void unregister_ptrace(struct task_struct *child)
 	/* Ups, no more memory but no way to return an error :/
 	 * we will proceed as if the caller had ask for the tracee to be killed
 	 * on detaching */
-	if (IS_ERR(child_mm->m_sec))
+	if (IS_ERR(child_mm->m_sec)) {
 		send_sig_info(SIGKILL, SEND_SIG_FORCED, child);
+		child_mm->m_sec = NULL;
+	}
 	msec_put(tracer_msec);
 	mutex_unlock(&flows_lock);
 }
