@@ -512,9 +512,8 @@ int register_msg_reception(struct msg_msg *msg)
 	INIT_HLIST_NODE(&flow->by_task);
 
 	mutex_lock(&flows_lock);
-	pr_debug("kblare: key for msg insertion %llu\n", (u64) msg);
-	hash_add(enabled_flows_by_src, &flow->by_src, ((u64) msg));
-	hash_add(enabled_flows_by_task, &flow->by_task, ((u64) current));
+	/* do not insert the msg in the discrete flows table because the
+	 * message cannot be the destination of any flow */
 	ret = register_flow_msg_to_mm(msg, mm);
 	mutex_unlock(&flows_lock);
 
