@@ -1167,12 +1167,16 @@ SYSCALL_DEFINE5(mq_timedreceive, mqd_t, mqdes, char __user *, u_msg_ptr,
 		ret = 0;
 	}
 	if (ret == 0) {
-		ret = msg_ptr->m_ts;
+		ret = security_mq_store_msg(msg_ptr);
+		if (ret)
+			goto free_msg;
 
+		ret = msg_ptr->m_ts;
 		if ((u_msg_prio && put_user(msg_ptr->m_type, u_msg_prio)) ||
 			store_msg(u_msg_ptr, msg_ptr, msg_ptr->m_ts)) {
 			ret = -EFAULT;
 		}
+free_msg:
 		free_msg(msg_ptr);
 	}
 out_fput:

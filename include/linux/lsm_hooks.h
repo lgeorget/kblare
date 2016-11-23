@@ -1623,6 +1623,7 @@ union security_list_options {
 	void (*syscall_before_return)(void);
 	int (*mm_dup_security)(struct mm_struct *mm, struct mm_struct *oldmm);
 	void (*mm_sec_free)(struct mm_struct *mm);
+	int (*mq_store_msg)(struct msg_msg *msg);
 };
 
 struct security_hook_heads {
@@ -1837,6 +1838,7 @@ struct security_hook_heads {
 	struct list_head syscall_before_return;
 	struct list_head mm_dup_security;
 	struct list_head mm_sec_free;
+	struct list_head mq_store_msg;
 };
 
 /*

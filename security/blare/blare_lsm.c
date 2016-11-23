@@ -445,6 +445,54 @@ static void blare_mm_sec_free(struct mm_struct *mm)
 	}
 }
 
+static int blare_mq_store_msg(struct msg_msg *msg)
+{
+	struct blare_mm_sec *msec = mm->m_sec;
+	if (!msec || !msg->security)
+		return 0;
+
+	return register_mq_reception(msg);
+}
+
+static int blare_msg_msg_alloc_security(struct msg_msg *msg)
+{
+	struct blare_mm_sec *msec = mm->m_sec;
+	struct blare_msg_sec *msgsec;
+	struct info_tags *tags = NULL;
+	if (!msec)
+		return 0;
+
+	msgsec = kmalloc(sizeof(blare_msg_sec), GFP_KERNEL);
+	if (!msgsec)
+		goto nomem;
+
+	if (msec->info.count > 0) {
+		msgsec->info.tags = kmemdup(msec->info.tags,
+			msec->info.count * sizeof(__s32), GFP_KERNEL);
+		if (!msgsec->info.tags)
+			goto free_msg_sec;
+	}
+
+	msgsec->info.tags = msec->info.tags;
+	msg->security = msgsec;
+	return 0;
+
+free_msg_sec:
+	kfree(msgsec);
+	msg->security = NULL;
+nomem:
+	return -ENOMEM;
+}
+
+static void blare_msg_msg_free_security(struct msg_msg *msg)
+{
+	if (msg->security) {
+		struct blare_msg_sec *msgsec = msg->security;
+		kfree(msg->info.tags);
+		kfree(msg);
+	}
+}
+
 static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(inode_alloc_security,blare_inode_alloc_security),
 	LSM_HOOK_INIT(inode_free_security,blare_inode_free_security),
@@ -463,6 +511,9 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(syscall_before_return,unregister_current_flow),
 	LSM_HOOK_INIT(mm_dup_security,blare_mm_dup_security),
 	LSM_HOOK_INIT(mm_sec_free,blare_mm_sec_free),
+	LSM_HOOK_INIT(mq_store_msg,blare_mq_store_msg),
+	LSM_HOOK_INIT(msg_msg_alloc_security,blare_msg_msg_alloc_security),
+	LSM_HOOK_INIT(msg_msg_free_security,blare_msg_msg_free_security),
 };
 
 static int __init blare_install(void)

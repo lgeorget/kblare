@@ -22,6 +22,7 @@
 #include <linux/spinlock.h>
 #include <linux/fsnotify.h>
 #include <linux/hashtable.h>
+#include <linux/msg.h>
 
 #include "blare.h"
 
@@ -34,6 +35,7 @@ struct discrete_flow {
 	union {
 		struct file *file;
 		struct mm_struct *mm;
+		struct msg_msg *msg;
 	} src;
 	union {
 		struct file *file;
@@ -48,6 +50,7 @@ struct bfs_elt {
 	union {
 		struct file *file;
 		struct mm_struct *mm;
+		struct msg_msg *msg;
 	} src;
 	union {
 		struct file *file;
@@ -412,6 +415,30 @@ static int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 	return __register_new_flow(first_flow, &msec->info);
 }
 
+/*
+ * called from:
+ * - mq_timedreceive
+ * - msgrcv
+ */
+static int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
+{
+	struct blare_msg_sec *msgsec = msg->security;
+	struct bfs_elt *first_flow;
+
+	if (!msgsec || !mm->m_sec || !tags_initialized(&msgsec->info))
+		return 0;
+
+	first_flow = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
+	if (!first_flow)
+		return -ENOMEM;
+
+	atomic_inc(&mm->mm_users);
+	first_flow->src.msg = msg;
+	first_flow->dest.mm = mm;
+	first_flow->type = BLARE_MM_TYPE;
+	return __register_new_flow(first_flow, &msgsec->info);
+}
+
 /* other flows to cover: clone (and fork...) */
 
 int register_read(struct file *file)
@@ -468,16 +495,38 @@ int register_write(struct file *file)
 	return ret;
 }
 
+int register_msg_reception(struct msg_msg *msg)
+{
+	int ret = 0;
+	struct mm_struct *mm = current->mm;
+	struct discrete_flow *flow = kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
+
+	if (!flow)
+		return -ENOMEM;
+
+	flow->resp = current;
+	flow->src.msg = msg;
+	flow->dest.mm = mm;
+	flow->type = BLARE_MM_TYPE;
+	INIT_HLIST_NODE(&flow->by_src);
+	INIT_HLIST_NODE(&flow->by_task);
+
+	mutex_lock(&flows_lock);
+	pr_debug("kblare: key for msg insertion %llu\n", (u64) msg);
+	hash_add(enabled_flows_by_src, &flow->by_src, ((u64) msg));
+	hash_add(enabled_flows_by_task, &flow->by_task, ((u64) current));
+	ret = register_flow_msg_to_mm(msg, mm);
+	mutex_unlock(&flows_lock);
+
+	return ret;
+}
+
 void unregister_current_flow(void)
 {
 	struct discrete_flow *flow;
 	mutex_lock(&flows_lock);
 	hash_for_each_possible(enabled_flows_by_task, flow, by_task, ((u64) current)) {
 		if (flow->resp == current) {
-			if (flow->type == BLARE_MM_TYPE)
-				pr_debug("kblare: removing inode key %llu\n", (u64) file_inode(flow->src.file));
-			else
-				pr_debug("kblare: removing mm key %llu\n", (u64) flow->src.mm);
 			hash_del(&flow->by_task);
 			hash_del(&flow->by_src);
 			kfree(flow);

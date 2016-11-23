@@ -370,6 +370,7 @@ int security_inode_getsecctx(struct inode *inode, void **ctx, u32 *ctxlen);
 void security_syscall_before_return(void);
 int security_mm_dup_security(struct mm_struct *mm, struct mm_struct *oldmm);
 void security_mm_sec_free(struct mm_struct *mm);
+int security_mq_store_msg(struct msg_msg *msg);
 #else /* CONFIG_SECURITY */
 struct security_mnt_opts {
 };
@@ -1142,6 +1143,10 @@ static inline int security_mm_dup_security(struct mm_struct *mm, struct mm_struc
 }
 void security_mm_sec_free(struct mm_struct *mm)
 {
+}
+int security_mq_store_msg(struct msg_msg *msg)
+{
+	return 0;
 }
 #endif	/* CONFIG_SECURITY */
 

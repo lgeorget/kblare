@@ -1563,6 +1563,11 @@ void security_mm_sec_free(struct mm_struct *mm)
 	call_void_hook(mm_sec_free, mm);
 }
 
+int security_mq_store_msg(struct msg_msg *msg)
+{
+	return call_int_hook(mq_store_msg, 0, msg);
+}
+
 struct security_hook_heads security_hook_heads = {
 	.binder_set_context_mgr =
 		LIST_HEAD_INIT(security_hook_heads.binder_set_context_mgr),
@@ -1914,4 +1919,6 @@ struct security_hook_heads security_hook_heads = {
 		LIST_HEAD_INIT(security_hook_heads.mm_dup_security),
 	.mm_sec_free =
 		LIST_HEAD_INIT(security_hook_heads.mm_sec_free),
+	.mq_store_msg =
+		LIST_HEAD_INIT(security_hook_heads.mq_store_msg),
 };

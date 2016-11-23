@@ -1005,7 +1005,8 @@ out_unlock1:
 		return PTR_ERR(msg);
 	}
 
-	bufsz = msg_handler(buf, msg, bufsz);
+	if (!security_mq_store_msg(msg))
+		bufsz = msg_handler(buf, msg, bufsz);
 	free_msg(msg);
 
 	return bufsz;
