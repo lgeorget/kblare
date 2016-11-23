@@ -23,6 +23,7 @@
 #include <net/af_unix.h>
 #include <linux/xattr.h>
 #include <linux/types.h>
+#include <linux/msg.h>
 
 #include "blare.h"
 
@@ -349,9 +350,7 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 	}
 
 	rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG, NULL, 0);
-	if (rc < 0) { /* no xattrs available, Blare cannot do much */
-		goto dput;
-	} else if (rc == 0) { /* there are xattrs but no tags */
+	if (rc <= 0) { /* no xattrs available or no tags */
 		isec->info.count = 0;
 		goto dput;
 	}
@@ -436,25 +435,22 @@ static void blare_mm_sec_free(struct mm_struct *mm)
 static int blare_mq_store_msg(struct msg_msg *msg)
 {
 	int ret;
-	struct blare_mm_sec *msec = mm->m_sec;
+	struct blare_mm_sec *msec = current->mm->m_sec;
 	if (!msec || !msg->security)
 		return 0;
 
-	ret = register_mq_reception(msg);
-	syscall_before_return(); /* the flow is atomic because at this point it
-				    has already occurred */
+	ret = register_msg_reception(msg);
 	return ret;
 }
 
 static int blare_msg_msg_alloc_security(struct msg_msg *msg)
 {
-	struct blare_mm_sec *msec = mm->m_sec;
+	struct blare_mm_sec *msec = current->mm->m_sec;
 	struct blare_msg_sec *msgsec;
-	struct info_tags *tags = NULL;
 	if (!msec)
 		return 0;
 
-	msgsec = kmalloc(sizeof(blare_msg_sec), GFP_KERNEL);
+	msgsec = kmalloc(sizeof(struct blare_msg_sec), GFP_KERNEL);
 	if (!msgsec)
 		goto nomem;
 
@@ -480,13 +476,13 @@ static void blare_msg_msg_free_security(struct msg_msg *msg)
 {
 	if (msg->security) {
 		struct blare_msg_sec *msgsec = msg->security;
-		kfree(msg->info.tags);
-		kfree(msg);
+		kfree(msgsec->info.tags);
+		kfree(msgsec);
 	}
 }
 
 static int blare_ptrace_access_check(struct task_struct *child,
-				     unsigned int /* mode */)
+				     unsigned int unused)
 {
 	struct blare_mm_sec *tracer_msec = current->mm->m_sec;
 	struct blare_mm_sec *child_msec = child->mm->m_sec;
