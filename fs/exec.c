@@ -833,6 +833,8 @@ int kernel_read(struct file *file, loff_t offset,
 	/* The cast to a user pointer is valid due to the set_fs() */
 	result = vfs_read(file, (void __user *)addr, count, &pos);
 	set_fs(old_fs);
+	/* we are not in an actual syscall but we have taken the same steps
+	 * so we need to undo them */
 	return result;
 }
 
