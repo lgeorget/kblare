@@ -78,20 +78,27 @@ static int get_mms_for_file(struct file *file, struct list_head *visit_list)
 		/* all vma-s are relevant here, we take a ref on the mm and we
 		 * place it on the list of stuff to visit */
 		struct mm_struct *mm = vma->vm_mm;
-		struct blare_mm_sec *msec;
-		if (!mm || !mm->m_sec)
+
+		/* do not consider already dead mm */
+		if (!mm || !atomic_inc_not_zero(&mm->mm_users))
 			continue;
 
-		msec = mm->m_sec;
+		if(!mm->m_sec) {
+			mmput(mm);
+			continue;
+		}
+
 		elt = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
 		if (!elt) {
 			ret = -ENOMEM;
+			mmput(mm);
 			goto unlock;
 		}
-		atomic_inc(&mm->mm_users);
+
 		elt->src.file = file;
 		elt->dest.mm = mm;
 		elt->type = BLARE_MM_TYPE;
+		BUG_ON(!mm->m_sec);
 		list_add_tail(&elt->list, visit_list);
 	}
 
@@ -150,6 +157,7 @@ static int get_discrete_flows_for_file(struct file *file, struct list_head *visi
 			continue;
 
 		mm = flow->dest.mm;
+		BUG_ON(!mm->m_sec);
 		elt = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
 		if (!elt)
 			return -ENOMEM;
@@ -278,8 +286,9 @@ static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, s
 {
 	struct blare_mm_sec *msec = mm->m_sec;
 	struct info_tags new_tags;
+	int ret;
 
-	int ret = propagate_tags(&msec->info, tags, &new_tags);
+	ret = propagate_tags(&msec->info, tags, &new_tags);
 	if (ret)
 		return ret;
 
@@ -336,6 +345,7 @@ static int __register_new_flow(struct bfs_elt *new_flow, struct info_tags *new_t
 	LIST_HEAD(visit_list);
 	struct bfs_elt *next, *temp;
 	int ret = 0;
+	int loop = 0;
 
 	list_add(&new_flow->list, &visit_list);
 	list_for_each_entry(next, &visit_list, list) {
@@ -350,6 +360,7 @@ static int __register_new_flow(struct bfs_elt *new_flow, struct info_tags *new_t
 			struct mm_struct *mm = next->dest.mm;
 			ret = propagate_to_mm(mm, &visit_list, new_tags);
 			mmput(mm);
+			loop++;
 		}
 
 		if (ret)
@@ -384,7 +395,8 @@ static int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 	if (!first_flow)
 		return -ENOMEM;
 
-	atomic_inc(&mm->mm_users);
+	BUG_ON(!atomic_inc_not_zero(&mm->mm_users));
+	BUG_ON(!mm->m_sec);
 	first_flow->src.file = file;
 	first_flow->dest.mm = mm;
 	first_flow->type = BLARE_MM_TYPE;
@@ -451,6 +463,7 @@ int register_read(struct file *file)
 	if (!flow)
 		return -ENOMEM;
 
+	atomic_inc(&mm->mm_users);
 	flow->resp = current;
 	flow->src.file = file;
 	flow->dest.mm = mm;
@@ -478,6 +491,7 @@ int register_write(struct file *file)
 	if (!flow)
 		return -ENOMEM;
 
+	get_file(file);
 	flow->resp = current;
 	flow->src.mm = mm;
 	flow->dest.file = file;
@@ -504,6 +518,7 @@ int register_msg_reception(struct msg_msg *msg)
 	if (!flow)
 		return -ENOMEM;
 
+	atomic_inc(&mm->mm_users);
 	flow->resp = current;
 	flow->src.msg = msg;
 	flow->dest.mm = mm;
@@ -528,6 +543,10 @@ void unregister_current_flow(void)
 		if (flow->resp == current) {
 			hash_del(&flow->by_task);
 			hash_del(&flow->by_src);
+			if (flow->type == BLARE_FILE_TYPE)
+				fput(flow->dest.file);
+			else
+				mmput(flow->dest.mm);
 			kfree(flow);
 			break;
 		}
@@ -539,8 +558,8 @@ int register_ptrace_attach(struct task_struct *tracer, struct task_struct *child
 {
 	struct mm_struct *child_mm = child->mm;
 	struct blare_mm_sec *child_msec = child_mm->m_sec;
-	struct blare_mm_sec *tracer_msec = tracer->mm->m_sec;
-	/* we do the m_sec shring under mutex in order not to propagate tags
+struct blare_mm_sec *tracer_msec = tracer->mm->m_sec;
+/* we do the m_sec shring under mutex in order not to propagate tags
 	 * inconsistently if the old m_sec is being used */
 	mutex_lock(&flows_lock);
 	msec_get(tracer_msec);
@@ -576,9 +595,9 @@ struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec)
 	msec = kmemdup(old_msec, sizeof(struct blare_mm_sec), GFP_KERNEL);
 	if (!msec)
 		goto nomem;
-	if (old_msec->info.tags) {
+	if (tags_initialized(&old_msec->info) && old_msec->info.count > 0) {
 		msec->info.tags = kmemdup(old_msec->info.tags,
-					  sizeof(struct blare_mm_sec), GFP_KERNEL);
+			old_msec->info.count * sizeof(__s32), GFP_KERNEL);
 		if (!msec->info.tags) {
 			kfree(msec);
 			goto nomem;

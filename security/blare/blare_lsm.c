@@ -35,6 +35,8 @@ static int blare_bprm_set_creds(struct linux_binprm *bprm)
 	struct inode *inode = file_inode(bprm->file);
 	struct blare_inode_sec *isec;
 
+	bprm->cred->security = NULL;
+
 	/* For now, we are only concerned with the permissions of the initial
 	 * file, not the wrappers/interpreters/etc. */
 	if (bprm->cred_prepared)
@@ -49,12 +51,13 @@ static int blare_bprm_set_creds(struct linux_binprm *bprm)
 	if (capable(CAP_MAC_ADMIN))
 		return 0;
 
-	msec = kzalloc(sizeof(struct blare_mm_sec), GFP_KERNEL);
+	msec = kmalloc(sizeof(struct blare_mm_sec), GFP_KERNEL);
 	if (!msec)
 		return -ENOMEM;
 	msec->info.count = 0;
+	msec->info.tags = NULL;
 
-	if (isec->info.count > 0) {
+	if (tags_initialized(&isec->info) && isec->info.count > 0) {
 		/* Copy the information tag */
 		msec->info.tags = kmemdup(isec->info.tags, isec->info.count * sizeof(__s32), GFP_KERNEL);
 		if (!msec->info.tags) {
@@ -62,9 +65,6 @@ static int blare_bprm_set_creds(struct linux_binprm *bprm)
 			return -ENOMEM;
 		}
 		msec->info.count = isec->info.count;
-	} else {
-		msec->info.count = 0;
-		msec->info.tags = NULL;
 	}
 	atomic_set(&msec->users, 1);
 	bprm->cred->security = msec;
@@ -99,8 +99,10 @@ static void blare_inode_free_security(struct inode* inode)
 {
 	struct blare_inode_sec *isec = inode->i_security;
 	if (isec) {
-		kfree(isec->info.tags);
+		if (tags_initialized(&isec->info))
+			kfree(isec->info.tags);
 		kfree(isec);
+		inode->i_security = NULL;
 	}
 }
 
@@ -326,7 +328,7 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 	struct dentry *dentry;
 	int rc;
 	int len;
-	if (!inode)
+	if (!inode || !inode->i_security)
 		return;
 
 	/* If this method is called with opt_dentry == root of the filesystem
@@ -399,8 +401,10 @@ static void blare_inode_post_setxattr(struct dentry *dentry, const char *name,
 		return;
 
 	isec = inode->i_security;
-	if (!isec)
+	if (!isec) {
 		pr_err("Blare: missing inode security structure");
+		return;
+	}
 
 	__blare_regen_inode_sec(isec, value, size);
 }
@@ -506,9 +510,7 @@ static int blare_ptrace_traceme(struct task_struct *parent)
 
 static void blare_ptrace_unlink(struct task_struct *child)
 {
-	struct blare_mm_sec *child_msec = child->mm->m_sec;
-
-	if (!child_msec)
+	if (!child->mm || !child->mm->m_sec)
 		return;
 
 	/* don't bother detaching the mm->m_sec if the child won't use it */
