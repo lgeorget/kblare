@@ -24,8 +24,15 @@
 #include <linux/xattr.h>
 #include <linux/types.h>
 #include <linux/msg.h>
+#include <linux/workqueue.h>
 
 #include "blare.h"
+
+struct async_task_freer
+{
+	struct task_struct *task;
+	struct work_struct work;
+};
 
 static int update_inode_tags(struct blare_inode_sec *isec, const void *value, size_t size);
 
@@ -520,6 +527,31 @@ static void blare_ptrace_unlink(struct task_struct *child)
 	unregister_ptrace(child);
 }
 
+/*
+ * blare_task_free makes sure that the discrete_flows list does not get too
+ * cluttered over time by making sure the entry corresponding to a given task
+ * are removed when said task exits. A valid way to have a post-death entry
+ * in the discrete_flows list is when a process is killed by a signal in the
+ * middle of a system call for instance.
+ */
+static void async_unregister_task_flow(struct work_struct* freer)
+{
+	struct async_task_freer *f = container_of(freer, struct async_task_freer, work);
+	unregister_task_flow(f->task);
+	kfree(freer);
+}
+
+static void blare_task_free(struct task_struct *task)
+{
+	struct async_task_freer *f = kmalloc(sizeof (struct async_task_freer),
+			GFP_ATOMIC);
+	if (!f)
+		return;
+	f->task = task;
+	INIT_WORK(&f->work, async_unregister_task_flow);
+	schedule_work(&f->work);
+}
+
 static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(inode_alloc_security,blare_inode_alloc_security),
 	LSM_HOOK_INIT(inode_free_security,blare_inode_free_security),
@@ -544,6 +576,7 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(ptrace_access_check,blare_ptrace_access_check),
 	LSM_HOOK_INIT(ptrace_traceme,blare_ptrace_traceme),
 	LSM_HOOK_INIT(ptrace_unlink,blare_ptrace_unlink),
+	LSM_HOOK_INIT(task_free,blare_task_free),
 };
 
 static int __init blare_install(void)

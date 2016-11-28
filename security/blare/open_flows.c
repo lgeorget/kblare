@@ -535,7 +535,7 @@ int register_msg_reception(struct msg_msg *msg)
 	return ret;
 }
 
-void unregister_current_flow(void)
+void unregister_task_flow(struct task_struct *p)
 {
 	struct discrete_flow *flow;
 	mutex_lock(&flows_lock);
@@ -552,6 +552,11 @@ void unregister_current_flow(void)
 		}
 	}
 	mutex_unlock(&flows_lock);
+}
+
+void unregister_current_flow(void)
+{
+	unregister_task_flow(current);
 }
 
 int register_ptrace_attach(struct task_struct *tracer, struct task_struct *child)
