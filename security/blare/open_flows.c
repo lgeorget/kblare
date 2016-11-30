@@ -23,12 +23,19 @@
 #include <linux/fsnotify.h>
 #include <linux/hashtable.h>
 #include <linux/msg.h>
+#include <linux/workqueue.h>
 
 #include "blare.h"
 
 #define BLARE_HASHTABLE_SHIFT 10
 #define BLARE_FILE_TYPE 0
 #define BLARE_MM_TYPE 1
+
+struct async_task_freer
+{
+	struct task_struct *task;
+	struct work_struct work;
+};
 
 struct discrete_flow {
 	struct task_struct *resp;
@@ -535,7 +542,7 @@ int register_msg_reception(struct msg_msg *msg)
 	return ret;
 }
 
-void unregister_task_flow(struct task_struct *p)
+static void unregister_task_flow(struct task_struct *p)
 {
 	struct discrete_flow *flow;
 	mutex_lock(&flows_lock);
@@ -557,6 +564,47 @@ void unregister_task_flow(struct task_struct *p)
 void unregister_current_flow(void)
 {
 	unregister_task_flow(current);
+}
+
+static bool task_maybe_hashed__unlocked(struct task_struct *task)
+{
+	int i = hash_min((u64) task, HASH_BITS(enabled_flows_by_task));
+	return !hlist_empty(&enabled_flows_by_task[i]);
+}
+
+static void async_unregister_task_flow(struct work_struct* freer)
+{
+	struct async_task_freer *f = container_of(freer, struct async_task_freer, work);
+	unregister_task_flow(f->task);
+	kfree(f);
+}
+
+ /*
+  * This can be called from interrupt context from blare_task_free so populate
+  * a workqueue to do the work
+  */
+void unregister_dying_task_flow(struct task_struct *task)
+{
+	struct async_task_freer *f;
+
+	/* Kernel threads are not of our concern */
+	if (current->mm)
+		return;
+
+	/* we can take a quick look at the hash table without taking the lock
+	 * because we cannot race with the insertion of a node by ourselves
+	 * (remember we are exiting) */
+	if (likely(!task_maybe_hashed__unlocked(task)))
+		return;
+
+	f = kmalloc(sizeof(*f), GFP_ATOMIC);
+	/* In case of such a very low memory situation, there is not a lot we
+	 * can do */
+	if (!f)
+		return;
+	f->task = task;
+	INIT_WORK(&f->work, async_unregister_task_flow);
+	schedule_work(&f->work);
 }
 
 int register_ptrace_attach(struct task_struct *tracer, struct task_struct *child)

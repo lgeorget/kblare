@@ -50,7 +50,7 @@ int register_msg_reception(struct msg_msg *msg);
 int register_ptrace_attach(struct task_struct *tracer,
 			   struct task_struct *child);
 void unregister_current_flow(void);
-void unregister_task_flow(struct task_struct *p);
+void unregister_dying_task_flow(struct task_struct *p);
 void unregister_ptrace(struct task_struct *child);
 struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec);
 void msec_get(struct blare_mm_sec *msec);
