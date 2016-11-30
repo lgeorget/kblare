@@ -2146,6 +2146,12 @@ int get_signal(struct ksignal *ksig)
 	 */
 	try_to_freeze();
 
+	/* At this point, we know that the process is going to either return to
+	 * userspace or restart its system call (if it was executing any), so
+	 * we let the LSMs know that they should erase all system call-related
+	 * state. */
+	security_syscall_before_return();
+
 relock:
 	spin_lock_irq(&sighand->siglock);
 	/*
