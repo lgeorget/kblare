@@ -24,6 +24,7 @@
 #include <linux/xattr.h>
 #include <linux/types.h>
 #include <linux/msg.h>
+#include <linux/mman.h>
 
 #include "blare.h"
 
@@ -532,6 +533,52 @@ static void blare_task_free(struct task_struct *task)
 	unregister_dying_task_flow(task);
 }
 
+static int blare_mmap_file(struct file *file, unsigned long reqprot,
+			   unsigned long prot, unsigned long flags)
+{
+	int ret;
+	struct blare_mm_sec *msec;
+	struct blare_inode_sec *isec;
+
+	if (!current->mm || !file)
+		return 0;
+
+	msec = current->mm->m_sec;
+	isec = file_inode(file)->i_security;
+
+	if (!msec || !isec)
+		return 0;
+
+	ret = register_read(file);
+	if (!ret && (prot & PROT_WRITE) && (flags & VM_SHARED))
+		ret = register_write(file);
+
+	return ret;
+}
+
+static int blare_file_mprotect(struct vm_area_struct *vma,
+			       unsigned long reqprot, unsigned long prot)
+{
+	int ret = 0;
+	struct file *file = vma->vm_file;
+	struct blare_mm_sec *msec;
+	struct blare_inode_sec *isec;
+
+	if (!current->mm || !file)
+		return 0;
+
+	msec = current->mm->m_sec;
+	isec = file_inode(file)->i_security;
+
+	if (!msec || !isec)
+		return 0;
+
+	if ((prot & PROT_WRITE) && (vma->vm_flags & VM_SHARED))
+		ret = register_write(file);
+
+	return ret;
+}
+
 static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(inode_alloc_security,blare_inode_alloc_security),
 	LSM_HOOK_INIT(inode_free_security,blare_inode_free_security),
@@ -557,6 +604,8 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(ptrace_traceme,blare_ptrace_traceme),
 	LSM_HOOK_INIT(ptrace_unlink,blare_ptrace_unlink),
 	LSM_HOOK_INIT(task_free,blare_task_free),
+	LSM_HOOK_INIT(mmap_file, blare_mmap_file),
+	LSM_HOOK_INIT(file_mprotect, blare_file_mprotect),
 };
 
 static int __init blare_install(void)
