@@ -588,7 +588,7 @@ void unregister_dying_task_flow(struct task_struct *task)
 	struct async_task_freer *f;
 
 	/* Kernel threads are not of our concern */
-	if (current->mm)
+	if (!current->mm)
 		return;
 
 	/* we can take a quick look at the hash table without taking the lock
