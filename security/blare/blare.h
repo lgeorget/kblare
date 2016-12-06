@@ -19,16 +19,16 @@
 #include <linux/types.h>
 #include <linux/mutex.h>
 #include <linux/fs.h>
+#include <linux/bitops.h>
 
 struct msg_msg;
 
 #define BLARE_XATTR_TAG_SUFFIX "blare.tag"
 #define BLARE_XATTR_TAG XATTR_SECURITY_PREFIX BLARE_XATTR_TAG_SUFFIX
-#define BLARE_XATTR_TAG_LEN (sizeof(BLARE_XATTR_TAG) - 1);
+#define BLARE_XATTR_TAG_LEN (sizeof(BLARE_XATTR_TAG) - 1)
 
 struct info_tags {
-	int count;
-	__s32 *tags;
+	__u32 tags[BLARE_TAGS_NUMBER];
 };
 
 struct blare_inode_sec {
@@ -56,8 +56,24 @@ struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec);
 void msec_get(struct blare_mm_sec *msec);
 void msec_put(struct blare_mm_sec *msec);
 
-static inline bool tags_initialized(struct info_tags *tags) {
-	return !!(tags->tags);
+static inline int tags_count(struct info_tags *tags) {
+	int count = 0;
+	int i;
+	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
+		count += hweight32(tags->tags[i]);
+	return count;
+}
+
+static inline void initialize_tags(struct info_tags *tags) {
+	int i;
+	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
+		tags->tags[i] = 0;
+}
+
+static inline void copy_tags(struct info_tags *dest, const struct info_tags *src) {
+	int i;
+	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
+		dest->tags[i] = src->tags[i];
 }
 
 #endif // _BLARE_H
