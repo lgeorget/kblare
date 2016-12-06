@@ -46,6 +46,9 @@ struct blare_msg_sec {
 	struct info_tags info;
 };
 
+int register_flow_file_to_mm(struct file *file, struct mm_struct *mm);
+int register_flow_mm_to_file(struct mm_struct *mm, struct file *file);
+int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm);
 int register_read(struct file *file);
 int register_write(struct file *file);
 int register_msg_reception(struct msg_msg *msg);

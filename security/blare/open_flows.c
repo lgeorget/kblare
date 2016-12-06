@@ -312,7 +312,7 @@ free_all_and_abort:
  * - recv
  * - mmap
  */
-static int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
+int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 {
 	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
@@ -337,7 +337,7 @@ static int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
  * - write
  * - send
  */
-static int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
+int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 {
 	struct inode *inode = file_inode(file);
 	struct blare_mm_sec *msec = mm->m_sec;
@@ -362,7 +362,7 @@ static int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
  * - mq_timedreceive
  * - msgrcv
  */
-static int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
+int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 {
 	struct blare_msg_sec *msgsec = msg->security;
 	struct bfs_elt *first_flow;
@@ -568,7 +568,7 @@ void unregister_ptrace(struct task_struct *child)
 struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec)
 {
 	struct blare_mm_sec *msec;
-	msec = kmemdup(old_msec, sizeof(struct blare_mm_sec), GFP_KERNEL);
+	msec = kmalloc(sizeof(struct blare_mm_sec), GFP_KERNEL);
 	if (!msec)
 		goto nomem;
 	copy_tags(&msec->info, &old_msec->info);

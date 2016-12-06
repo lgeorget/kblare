@@ -476,9 +476,9 @@ static int blare_mmap_file(struct file *file, unsigned long reqprot,
 	if (!msec || !isec)
 		return 0;
 
-	ret = register_read(file);
+	ret = register_flow_file_to_mm(file, current->mm);
 	if (!ret && (prot & PROT_WRITE) && (flags & VM_SHARED))
-		ret = register_write(file);
+		ret = register_flow_mm_to_file(current->mm, file);
 
 	return ret;
 }
@@ -501,7 +501,7 @@ static int blare_file_mprotect(struct vm_area_struct *vma,
 		return 0;
 
 	if ((prot & PROT_WRITE) && (vma->vm_flags & VM_SHARED))
-		ret = register_write(file);
+		ret = register_flow_mm_to_file(current->mm, file);
 
 	return ret;
 }
