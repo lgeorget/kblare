@@ -470,7 +470,7 @@ static void unregister_task_flow(struct task_struct *p)
 	struct discrete_flow *flow;
 	mutex_lock(&flows_lock);
 	hash_for_each_possible(enabled_flows_by_task, flow, by_task, ((u64) p)) {
-		if (flow->resp == current) {
+		if (flow->resp == p) {
 			hash_del(&flow->by_task);
 			hash_del(&flow->by_src);
 			if (flow->type == BLARE_FILE_TYPE)
