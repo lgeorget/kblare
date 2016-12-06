@@ -28,8 +28,6 @@
 
 #include "blare.h"
 
-static int update_inode_tags(struct blare_inode_sec *isec, const void *value, size_t size);
-
 static int blare_bprm_set_creds(struct linux_binprm *bprm)
 {
 	struct blare_mm_sec *msec;
@@ -55,18 +53,8 @@ static int blare_bprm_set_creds(struct linux_binprm *bprm)
 	msec = kmalloc(sizeof(struct blare_mm_sec), GFP_KERNEL);
 	if (!msec)
 		return -ENOMEM;
-	msec->info.count = 0;
-	msec->info.tags = NULL;
 
-	if (tags_initialized(&isec->info) && isec->info.count > 0) {
-		/* Copy the information tag */
-		msec->info.tags = kmemdup(isec->info.tags, isec->info.count * sizeof(__s32), GFP_KERNEL);
-		if (!msec->info.tags) {
-			kfree(msec);
-			return -ENOMEM;
-		}
-		msec->info.count = isec->info.count;
-	}
+	copy_tags(&msec->info, &isec->info);
 	atomic_set(&msec->users, 1);
 	bprm->cred->security = msec;
 
@@ -90,8 +78,7 @@ static int blare_inode_alloc_security(struct inode* inode)
 		return -ENOMEM;
 
 	isec = inode->i_security;
-	isec->info.count = 0;
-	isec->info.tags = NULL;
+	initialize_tags(&isec->info);
 
 	return 0;
 }
@@ -99,12 +86,8 @@ static int blare_inode_alloc_security(struct inode* inode)
 static void blare_inode_free_security(struct inode* inode)
 {
 	struct blare_inode_sec *isec = inode->i_security;
-	if (isec) {
-		if (tags_initialized(&isec->info))
-			kfree(isec->info.tags);
-		kfree(isec);
-		inode->i_security = NULL;
-	}
+	kfree(isec);
+	inode->i_security = NULL;
 }
 
 static int blare_inode_setxattr(struct dentry *dentry, const char *name,
@@ -140,9 +123,7 @@ static int blare_inode_removexattr(struct dentry *dentry, const char *name)
 		} else {
 			if (inode->i_security) {
 				struct blare_inode_sec *isec = inode->i_security;
-				kfree(isec->info.tags);
-				isec->info.count = 0;
-				isec->info.tags = NULL;
+				initialize_tags(&isec->info);
 			}
 			return 0;
 		}
@@ -166,14 +147,9 @@ static int blare_inode_getsecurity(struct inode *inode, const char *name, void *
 	}
 
 	isec = inode->i_security;
-	size = isec->info.count * sizeof(__s32);
+	size = sizeof(__u32) * BLARE_TAGS_NUMBER;
 	if (!alloc || !buffer)
 		goto ret;
-
-	if (!size) {
-		*buffer = NULL;
-		goto ret;
-	}
 
 	*buffer = kmemdup(isec->info.tags, size, GFP_NOFS);
 	if (!*buffer)
@@ -192,6 +168,8 @@ static int blare_inode_setsecurity(struct inode *inode, const char *name,
 				   const void *value, size_t size, int flags)
 {
 	struct blare_inode_sec *isec;
+	const __u32 *tags_value;
+	int i;
 
 	if (strcmp(name, BLARE_XATTR_TAG_SUFFIX) != 0)
 		return -EOPNOTSUPP;
@@ -205,8 +183,12 @@ static int blare_inode_setsecurity(struct inode *inode, const char *name,
 	}
 
 	isec = inode->i_security;
-	/* i_mutex is already hold */
-	return update_inode_tags(isec, value, size);
+	tags_value = value;
+
+	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
+		isec->info.tags[i] = tags_value[i];
+
+	return 0;
 }
 
 static int blare_file_permission(struct file *file, int mask)
@@ -305,30 +287,11 @@ put_sock:
 	return rc;
 }
 
-static int update_inode_tags(struct blare_inode_sec *isec, const void *value, size_t size)
-{
-	int i;
-	int len = size / sizeof(__s32);
-
-	if (tags_initialized(&isec->info))
-		kfree(isec->info.tags);
-
-	isec->info.tags = kmalloc(size, GFP_NOFS);
-	if (!isec->info.tags)
-		return -ENOMEM;
-
-	for (i=0 ; i<len ; i++)
-		isec->info.tags[i] = ((__s32*)value)[i];
-
-	return 0;
-}
-
 static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 {
 	struct blare_inode_sec *isec;
 	struct dentry *dentry;
 	int rc;
-	int len;
 	if (!inode || !inode->i_security)
 		return;
 
@@ -354,41 +317,17 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 
 	rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG, NULL, 0);
 	if (rc <= 0) { /* no xattrs available or no tags */
-		isec->info.count = 0;
 		goto dput;
 	}
+	WARN_ON(rc != BLARE_TAGS_NUMBER * sizeof(__u32));
 
-	isec->info.tags = kmalloc(rc, GFP_NOFS);
-	if (!isec->info.tags)
-		goto dput;
-
-	len = rc / sizeof(__s32);
 	rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG,
-				   isec->info.tags, rc);
-	if (rc < 0)
-		kfree(isec->info.tags);
-	else
-		isec->info.count = len;
+				   isec->info.tags,
+				   BLARE_TAGS_NUMBER * sizeof(__u32));
 
 dput:
 	dput(dentry);
 
-}
-
-static void __blare_regen_inode_sec(struct blare_inode_sec *isec,
-				      const void *value, size_t size)
-{
-	int len = size / sizeof(__s32);
-	if (tags_initialized(&isec->info))
-		kfree(isec->info.tags);
-
-	isec->info.count = 0;
-	isec->info.tags = kmalloc(size, GFP_NOFS);
-	if (!isec->info.tags)
-		return;
-
-	memcpy(isec->info.tags, value, size);
-	isec->info.count = len;
 }
 
 static void blare_inode_post_setxattr(struct dentry *dentry, const char *name,
@@ -407,7 +346,8 @@ static void blare_inode_post_setxattr(struct dentry *dentry, const char *name,
 		return;
 	}
 
-	__blare_regen_inode_sec(isec, value, size);
+	WARN_ON(size != sizeof(__u32) * BLARE_TAGS_NUMBER);
+	memcpy(isec->info.tags, value, size);
 }
 
 static int blare_mm_dup_security(struct mm_struct *mm, struct mm_struct *oldmm)
@@ -458,32 +398,19 @@ static int blare_msg_msg_alloc_security(struct msg_msg *msg)
 	msgsec = kmalloc(sizeof(struct blare_msg_sec), GFP_KERNEL);
 	if (!msgsec)
 		goto nomem;
+	copy_tags(&msgsec->info, &msec->info);
 
-	if (msec->info.count > 0) {
-		msgsec->info.tags = kmemdup(msec->info.tags,
-			msec->info.count * sizeof(__s32), GFP_KERNEL);
-		if (!msgsec->info.tags)
-			goto free_msg_sec;
-	}
-
-	msgsec->info.tags = msec->info.tags;
 	msg->security = msgsec;
 	return 0;
 
-free_msg_sec:
-	kfree(msgsec);
-	msg->security = NULL;
 nomem:
 	return -ENOMEM;
 }
 
 static void blare_msg_msg_free_security(struct msg_msg *msg)
 {
-	if (msg->security) {
-		struct blare_msg_sec *msgsec = msg->security;
-		kfree(msgsec->info.tags);
-		kfree(msgsec);
-	}
+	struct blare_msg_sec *msgsec = msg->security;
+	kfree(msgsec);
 }
 
 static int blare_ptrace_access_check(struct task_struct *child,

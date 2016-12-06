@@ -204,106 +204,30 @@ static int get_discrete_flows_for_mm(struct mm_struct *mm, struct list_head *vis
 	return 0;
 }
 
-static int propagate_tags(struct info_tags *dest, struct info_tags *src,
+static void propagate_tags(struct info_tags *dest, struct info_tags *src,
 		    struct info_tags *tags_added)
 {
-	__s32 *tags, *new_dest_tags;
-	tags_added->count = 0;
-	tags_added->tags = NULL;
-
-	if (src->count == 0) {
-		/* no tags in source, exit right away */
-		return 0;
+	int i;
+	/* we have to merge the new tags with the ones already present
+	 * in the destination container */
+	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++) {
+		tags_added->tags[i] = src->tags[i] & ~(dest->tags[i]);
+		dest->tags[i] |= src->tags[i];
 	}
-
-	if (dest->count == 0) {
-		/* this is the easy case, we can just copy the tags over */
-		tags = kmemdup(src->tags, src->count * sizeof(__s32), GFP_KERNEL);
-		if (!tags)
-			return -ENOMEM;
-		memcpy(tags, src->tags, src->count * sizeof(__s32));
-		dest->tags = tags;
-		dest->count = src->count;
-
-		/* and the set of added tags is precisely the same set too */
-		tags = kmemdup(src->tags, src->count * sizeof(__s32), GFP_KERNEL);
-		if (!tags)
-			return -ENOMEM;
-		memcpy(tags, src->tags, src->count * sizeof(__s32));
-		tags_added->tags = tags;
-		tags_added->count = src->count;
-		return 0;
-	} else {
-		/* we have to merge the new tags with the ones already present
-		 * in the destination container */
-
-		/* First of all, how many new tags are there? */
-		int new_tags_count = 0;
-		int i,j;
-		int last_tag = 0;
-
-		for (i = 0 ; i < src->count ; i++) {
-			for (j = 0 ;
-			     j < dest->count && src->tags[i] != dest->tags[j] ;
-			     j++)
-			{}
-			if (j == dest->count) /* tag is absent */
-				new_tags_count++;
-		}
-
-		if (!new_tags_count) {
-			/* no new tags: fast path */
-			return 0;
-		}
-
-		/* There are some new tags: make room for them and copy them
-		 * over */
-		tags = kmalloc(new_tags_count * sizeof(__s32), GFP_KERNEL);
-		new_dest_tags = kmalloc((new_tags_count + dest->count) * sizeof(__s32), GFP_KERNEL);
-
-		if (!tags || !new_dest_tags)
-			return -ENOMEM;
-
-		for (i = 0 ; i < src->count ; i++) {
-			for (j = 0 ;
-			     j < dest->count && src->tags[i] != dest->tags[j] ;
-			     j++)
-			{}
-			if (j == dest->count) {
-				tags[last_tag++] = src->tags[i];
-
-			}
-		}
-
-		memcpy(new_dest_tags, dest->tags, dest->count * sizeof(__s32));
-		memcpy(&(new_dest_tags[dest->count]), tags, new_tags_count * sizeof(__s32));
-
-		/* all went well, commit */
-		kfree(dest->tags);
-		dest->count += new_tags_count;
-		dest->tags = new_dest_tags;
-		tags_added->count = new_tags_count;
-		tags_added->tags = tags;
-	}
-
-	return 0;
 }
 
 static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, struct info_tags *tags)
 {
 	struct blare_mm_sec *msec = mm->m_sec;
 	struct info_tags new_tags;
-	int ret;
+	int ret = 0;
 
-	ret = propagate_tags(&msec->info, tags, &new_tags);
-	if (ret)
-		return ret;
+	propagate_tags(&msec->info, tags, &new_tags);
 
-	if (new_tags.count > 0) {
+	if (tags_count(&new_tags) > 0) {
 		ret = get_files_for_mm(mm, visit_list);
 		if (!ret)
 			ret = get_discrete_flows_for_mm(mm, visit_list);
-		kfree(new_tags.tags);
 	}
 
 	return ret;
@@ -314,11 +238,11 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list, st
 	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
 	struct info_tags new_tags;
+	int ret = 0;
 
-	int ret = propagate_tags(&isec->info, tags, &new_tags);
-	if (ret)
-		return ret;
-	if (new_tags.count > 0) {
+	propagate_tags(&isec->info, tags, &new_tags);
+
+	if (tags_count(&new_tags) > 0) {
 		struct dentry *dentry = dget(file_dentry(file));
 		if (dentry && inode->i_op->setxattr) {
 			int rc;
@@ -330,7 +254,7 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list, st
 			inode_lock(inode);
 			rc = inode->i_op->setxattr(dentry, inode,
 				BLARE_XATTR_TAG, isec->info.tags,
-				isec->info.count * sizeof(__s32), 0);
+				BLARE_TAGS_NUMBER * sizeof(__u32), 0);
 			if (!rc)
 				fsnotify_xattr(dentry);
 			inode_unlock(inode);
@@ -341,7 +265,6 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list, st
 		ret = get_mms_for_file(file, visit_list);
 		if (!ret)
 			ret = get_discrete_flows_for_file(file, visit_list);
-		kfree(new_tags.tags);
 	}
 
 	return ret;
@@ -395,7 +318,7 @@ static int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 	struct blare_inode_sec *isec = inode->i_security;
 	struct bfs_elt *first_flow;
 
-	if (!isec || !mm->m_sec || !tags_initialized(&isec->info))
+	if (!isec || !mm->m_sec || tags_count(&isec->info) == 0)
 		return 0;
 
 	first_flow = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
@@ -420,7 +343,7 @@ static int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 	struct blare_mm_sec *msec = mm->m_sec;
 	struct bfs_elt *first_flow;
 
-	if (!msec || !inode->i_security || !tags_initialized(&msec->info))
+	if (!msec || !inode->i_security || tags_count(&msec->info) == 0)
 		return 0;
 
 	first_flow = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
@@ -444,7 +367,7 @@ static int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 	struct blare_msg_sec *msgsec = msg->security;
 	struct bfs_elt *first_flow;
 
-	if (!msgsec || !mm->m_sec || !tags_initialized(&msgsec->info))
+	if (!msgsec || !mm->m_sec || tags_count(&msgsec->info) == 0)
 		return 0;
 
 	first_flow = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
@@ -546,7 +469,7 @@ static void unregister_task_flow(struct task_struct *p)
 {
 	struct discrete_flow *flow;
 	mutex_lock(&flows_lock);
-	hash_for_each_possible(enabled_flows_by_task, flow, by_task, ((u64) current)) {
+	hash_for_each_possible(enabled_flows_by_task, flow, by_task, ((u64) p)) {
 		if (flow->resp == current) {
 			hash_del(&flow->by_task);
 			hash_del(&flow->by_src);
@@ -648,14 +571,7 @@ struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec)
 	msec = kmemdup(old_msec, sizeof(struct blare_mm_sec), GFP_KERNEL);
 	if (!msec)
 		goto nomem;
-	if (tags_initialized(&old_msec->info) && old_msec->info.count > 0) {
-		msec->info.tags = kmemdup(old_msec->info.tags,
-			old_msec->info.count * sizeof(__s32), GFP_KERNEL);
-		if (!msec->info.tags) {
-			kfree(msec);
-			goto nomem;
-		}
-	}
+	copy_tags(&msec->info, &old_msec->info);
 	atomic_set(&msec->users, 1);
 	return msec;
 
@@ -665,13 +581,12 @@ nomem:
 
 void msec_get(struct blare_mm_sec *msec)
 {
-	atomic_inc(&msec->users);
+	atomic_inc_not_zero(&msec->users);
 }
 
 void msec_put(struct blare_mm_sec *msec)
 {
 	if (atomic_dec_and_test(&msec->users)) {
-		kfree(msec->info.tags);
 		kfree(msec);
 	}
 }

@@ -27,6 +27,8 @@ struct msg_msg;
 #define BLARE_XATTR_TAG XATTR_SECURITY_PREFIX BLARE_XATTR_TAG_SUFFIX
 #define BLARE_XATTR_TAG_LEN (sizeof(BLARE_XATTR_TAG) - 1)
 
+#define BLARE_TAGS_NUMBER 4
+
 struct info_tags {
 	__u32 tags[BLARE_TAGS_NUMBER];
 };
