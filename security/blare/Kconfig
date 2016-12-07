@@ -9,3 +9,15 @@ config SECURITY_BLARE
 	  files, sockets, etc.
 
 	  If you are unsure how to answer this question, answer N.
+
+config SECURITY_BLARE_TAGS_SIZE
+	int "Size of Blare information tags (in number of 32-bits int)"
+	range 4 1024
+	default 16
+	depends on SECURITY_BLARE
+	help
+	  Selects the size of the bitfield arrays that store Blare information
+	  tags. A larger number means more tags are available, and possibly
+	  more expressive security policies can be defined but also a larger
+	  memory footprint. Remember that an information tag is allocated for
+	  every inode and task in the system.
