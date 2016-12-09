@@ -46,6 +46,7 @@ struct blare_msg_sec {
 	struct info_tags info;
 };
 
+/* open_flows.c */
 int register_flow_file_to_mm(struct file *file, struct mm_struct *mm);
 int register_flow_mm_to_file(struct mm_struct *mm, struct file *file);
 int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm);
@@ -81,4 +82,7 @@ static inline void copy_tags(struct info_tags *dest, const struct info_tags *src
 		dest->tags[i] = src->tags[i];
 }
 
+/* securityfs.c */
+int blare_init_fs(void);
+bool is_traced(int tag);
 #endif // _BLARE_H
