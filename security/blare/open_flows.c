@@ -312,7 +312,7 @@ free_all_and_abort:
  * - recv
  * - mmap
  */
-int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
+static int __register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 {
 	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
@@ -333,11 +333,20 @@ int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 	return __register_new_flow(first_flow, &isec->info);
 }
 
+int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
+{
+	int ret;
+	mutex_lock(&flows_lock);
+	ret = __register_flow_file_to_mm(file, mm);
+	mutex_unlock(&flows_lock);
+	return ret;
+}
+
 /* called from:
  * - write
  * - send
  */
-int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
+static int __register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 {
 	struct inode *inode = file_inode(file);
 	struct blare_mm_sec *msec = mm->m_sec;
@@ -357,12 +366,21 @@ int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 	return __register_new_flow(first_flow, &msec->info);
 }
 
+int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
+{
+	int ret;
+	mutex_lock(&flows_lock);
+	ret = __register_flow_mm_to_file(mm, file);
+	mutex_unlock(&flows_lock);
+	return ret;
+}
+
 /*
  * called from:
  * - mq_timedreceive
  * - msgrcv
  */
-int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
+static int __register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 {
 	struct blare_msg_sec *msgsec = msg->security;
 	struct bfs_elt *first_flow;
@@ -379,6 +397,15 @@ int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 	first_flow->dest.mm = mm;
 	first_flow->type = BLARE_MM_TYPE;
 	return __register_new_flow(first_flow, &msgsec->info);
+}
+
+int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
+{
+	int ret;
+	mutex_lock(&flows_lock);
+	ret = __register_flow_msg_to_mm(msg, mm);
+	mutex_unlock(&flows_lock);
+	return ret;
 }
 
 /* other flows to cover: clone (and fork...) */
@@ -405,7 +432,7 @@ int register_read(struct file *file)
 	pr_debug("kblare: key for inode insertion %llu\n", (u64) inode);
 	hash_add(enabled_flows_by_src, &flow->by_src, ((u64) inode));
 	hash_add(enabled_flows_by_task, &flow->by_task, ((u64) current));
-	ret = register_flow_file_to_mm(file, mm);
+	ret = __register_flow_file_to_mm(file, mm);
 	mutex_unlock(&flows_lock);
 
 	return ret;
@@ -433,7 +460,7 @@ int register_write(struct file *file)
 	pr_debug("kblare: key for mm insertion %llu\n", (u64) mm);
 	hash_add(enabled_flows_by_src, &flow->by_src, ((u64) mm));
 	hash_add(enabled_flows_by_task, &flow->by_task, ((u64) current));
-	ret = register_flow_mm_to_file(mm, file);
+	ret = __register_flow_mm_to_file(mm, file);
 	mutex_unlock(&flows_lock);
 
 	return ret;
@@ -456,11 +483,9 @@ int register_msg_reception(struct msg_msg *msg)
 	INIT_HLIST_NODE(&flow->by_src);
 	INIT_HLIST_NODE(&flow->by_task);
 
-	mutex_lock(&flows_lock);
 	/* do not insert the msg in the discrete flows table because the
 	 * message cannot be the destination of any flow */
 	ret = register_flow_msg_to_mm(msg, mm);
-	mutex_unlock(&flows_lock);
 
 	return ret;
 }
