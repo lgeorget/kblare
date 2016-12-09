@@ -316,14 +316,31 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 	}
 
 	rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG, NULL, 0);
-	if (rc <= 0) { /* no xattrs available or no tags */
+	if (rc <= 0) /* no xattrs available or no tags */
 		goto dput;
-	}
-	WARN_ON(rc != BLARE_TAGS_NUMBER * sizeof(__u32));
 
-	rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG,
-				   isec->info.tags,
-				   BLARE_TAGS_NUMBER * sizeof(__u32));
+	if (rc <= BLARE_TAGS_NUMBER * sizeof(__u32)) {
+		int i,j;
+		rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG,
+					   isec->info.tags, rc);
+
+		/* we have to adjust the tag size if rc < BLARE_TAGS_NUMBER
+		 * (happens if the tag size is bigger now than when the file
+		 * last got a new tag)
+		 * we could also refresh the xattrs on disk while we are at it
+		 * but is it really necessary? */
+		for (i=rc/sizeof(__u32), j=rc ; j<BLARE_TAGS_NUMBER ;
+		     i++, j+=sizeof(__u32))
+			isec->info.tags[i] = 0;
+	} else {
+		pr_err("Blare: file %pd2 comes from a system where tags are "
+		       "longer.\nConsider compiling your kernel with "
+		       "CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu or more.",
+		       dentry, rc/sizeof(32));
+		rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG,
+					   isec->info.tags,
+					   BLARE_TAGS_NUMBER * sizeof(__u32));
+	}
 
 dput:
 	dput(dentry);
