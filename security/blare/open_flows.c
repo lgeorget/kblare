@@ -275,7 +275,6 @@ static int __register_new_flow(struct bfs_elt *new_flow, struct info_tags *new_t
 	LIST_HEAD(visit_list);
 	struct bfs_elt *next, *temp;
 	int ret = 0;
-	int loop = 0;
 
 	list_add(&new_flow->list, &visit_list);
 	list_for_each_entry(next, &visit_list, list) {
@@ -290,7 +289,6 @@ static int __register_new_flow(struct bfs_elt *new_flow, struct info_tags *new_t
 			struct mm_struct *mm = next->dest.mm;
 			ret = propagate_to_mm(mm, &visit_list, new_tags);
 			mmput(mm);
-			loop++;
 		}
 
 		if (ret)
