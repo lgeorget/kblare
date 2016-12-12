@@ -555,7 +555,7 @@ static struct security_hook_list blare_hooks[] = {
 static int __init blare_install(void)
 {
 	int ret;
-	pr_info("Dummy: Information Flow Monitor.\n");
+	pr_info("Blare: Information Flow Monitor.\n");
 	ret = blare_init_fs();
 	if (ret)
 		return ret;
