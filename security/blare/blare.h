@@ -53,6 +53,7 @@ struct blare_msg_sec {
 int register_flow_file_to_mm(struct file *file, struct mm_struct *mm);
 int register_flow_mm_to_file(struct mm_struct *mm, struct file *file);
 int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm);
+int register_new_tags_for_mm(const struct info_tags *tags, struct mm_struct *mm);
 int register_read(struct file *file);
 int register_write(struct file *file);
 int register_msg_reception(struct msg_msg *msg);
@@ -65,7 +66,7 @@ struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec);
 void msec_get(struct blare_mm_sec *msec);
 void msec_put(struct blare_mm_sec *msec);
 
-static inline int tags_count(struct info_tags *tags) {
+static inline int tags_count(const struct info_tags *tags) {
 	int count = 0;
 	int i;
 	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
@@ -88,4 +89,6 @@ static inline void copy_tags(struct info_tags *dest, const struct info_tags *src
 /* securityfs.c */
 int blare_init_fs(void);
 bool is_traced(int tag);
+int blare_tags_to_string(const __u32 *tag, char** buffer);
+int blare_tags_from_string(const char* buf, size_t length, __u32 *tag);
 #endif // _BLARE_H

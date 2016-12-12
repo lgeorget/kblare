@@ -19,7 +19,6 @@
 #include <linux/gfp.h>
 #include <linux/types.h>
 #include <linux/list.h>
-#include <linux/spinlock.h>
 #include <linux/fsnotify.h>
 #include <linux/hashtable.h>
 #include <linux/msg.h>
@@ -204,7 +203,7 @@ static int get_discrete_flows_for_mm(struct mm_struct *mm, struct list_head *vis
 	return 0;
 }
 
-static void propagate_tags(struct info_tags *dest, struct info_tags *src,
+static void propagate_tags(struct info_tags *dest, const struct info_tags *src,
 		    struct info_tags *tags_added)
 {
 	int i;
@@ -217,7 +216,7 @@ static void propagate_tags(struct info_tags *dest, struct info_tags *src,
 	}
 }
 
-static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, struct info_tags *tags)
+static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, const struct info_tags *tags)
 {
 	struct blare_mm_sec *msec = mm->m_sec;
 	struct info_tags new_tags;
@@ -234,7 +233,7 @@ static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, s
 	return ret;
 }
 
-static int propagate_to_file(struct file *file, struct list_head *visit_list, struct info_tags *tags)
+static int propagate_to_file(struct file *file, struct list_head *visit_list, const struct info_tags *tags)
 {
 	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
@@ -271,7 +270,7 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list, st
 	return ret;
 }
 
-static int __register_new_flow(struct bfs_elt *new_flow, struct info_tags *new_tags)
+static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags *new_tags)
 {
 	LIST_HEAD(visit_list);
 	struct bfs_elt *next, *temp;
@@ -403,6 +402,36 @@ int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 	int ret;
 	mutex_lock(&flows_lock);
 	ret = __register_flow_msg_to_mm(msg, mm);
+	mutex_unlock(&flows_lock);
+	return ret;
+}
+
+/*
+ * called from setprocattr (write into /proc/self/attr/current)
+ */
+static int __register_new_tags_for_mm(const struct info_tags *new_tags, struct mm_struct *mm)
+{
+	struct bfs_elt *first_flow;
+
+	if (!new_tags || !mm->m_sec || tags_count(new_tags) == 0)
+		return 0;
+
+	first_flow = kmalloc(sizeof(struct bfs_elt), GFP_KERNEL);
+	if (!first_flow)
+		return -ENOMEM;
+
+	atomic_inc(&mm->mm_users);
+	first_flow->src.mm = current->mm;
+	first_flow->dest.mm = mm;
+	first_flow->type = BLARE_MM_TYPE;
+	return __register_new_flow(first_flow, new_tags);
+}
+
+int register_new_tags_for_mm(const struct info_tags *tags, struct mm_struct *mm)
+{
+	int ret;
+	mutex_lock(&flows_lock);
+	ret = __register_new_tags_for_mm(tags, mm);
 	mutex_unlock(&flows_lock);
 	return ret;
 }

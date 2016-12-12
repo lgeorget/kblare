@@ -523,6 +523,62 @@ static int blare_file_mprotect(struct vm_area_struct *vma,
 	return ret;
 }
 
+static int blare_getprocattr(struct task_struct *p, char *name, char **value)
+{
+	struct blare_mm_sec *msec;
+
+	if (!p->mm)
+		return -EINVAL;
+
+	msec = p->mm->m_sec;
+	if (!msec)
+		return -ENODATA;
+
+	if (strcmp(name, "current") != 0)
+		return -EINVAL;
+
+	return blare_tags_to_string(msec->info.tags, value);
+}
+
+static int blare_setprocattr(struct task_struct *p, char *name,
+			     void *value, size_t size)
+{
+	struct info_tags new_tags;
+	struct blare_mm_sec *msec;
+	const struct cred *tcred;
+	int ret, nbytes;
+
+	if (strcmp(name, "current") != 0)
+		return -EINVAL;
+
+	/* a task may change the tags of another if it is CAP_MAC_ADMIN */
+	rcu_read_lock();
+	tcred = __task_cred(p);
+	if (p != current &&
+	    !has_ns_capability(current, tcred->user_ns, CAP_MAC_ADMIN)) {
+		rcu_read_unlock();
+		return -EPERM;
+	}
+	rcu_read_unlock();
+
+	if (!p->mm)
+		return -EINVAL;
+
+	msec = p->mm->m_sec;
+	if (!msec)
+		return -ENODATA;
+
+	if ((nbytes = blare_tags_from_string((char*) value, size, new_tags.tags)) < size)
+		return -EINVAL;
+
+	/* it is impossible to remove tags, you can only add some */
+	ret = register_new_tags_for_mm(&new_tags, p->mm);
+	if (ret)
+		return ret;
+
+	return nbytes;
+}
+
 static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(inode_alloc_security,blare_inode_alloc_security),
 	LSM_HOOK_INIT(inode_free_security,blare_inode_free_security),
@@ -550,6 +606,8 @@ static struct security_hook_list blare_hooks[] = {
 	LSM_HOOK_INIT(task_free,blare_task_free),
 	LSM_HOOK_INIT(mmap_file, blare_mmap_file),
 	LSM_HOOK_INIT(file_mprotect, blare_file_mprotect),
+	LSM_HOOK_INIT(getprocattr, blare_getprocattr),
+	LSM_HOOK_INIT(setprocattr, blare_setprocattr),
 };
 
 static int __init blare_install(void)
