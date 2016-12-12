@@ -29,6 +29,9 @@ struct msg_msg;
 
 #define BLARE_TAGS_NUMBER CONFIG_SECURITY_BLARE_TAGS_SIZE
 
+/* defined in securityfs */
+extern int blare_enabled;
+
 struct info_tags {
 	__u32 tags[BLARE_TAGS_NUMBER];
 };

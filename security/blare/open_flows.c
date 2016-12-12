@@ -212,7 +212,8 @@ static void propagate_tags(struct info_tags *dest, struct info_tags *src,
 	 * in the destination container */
 	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++) {
 		tags_added->tags[i] = src->tags[i] & ~(dest->tags[i]);
-		dest->tags[i] |= src->tags[i];
+		if (blare_enabled)
+			dest->tags[i] |= src->tags[i];
 	}
 }
 
@@ -244,7 +245,7 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list, st
 
 	if (tags_count(&new_tags) > 0) {
 		struct dentry *dentry = dget(file_dentry(file));
-		if (dentry && inode->i_op->setxattr) {
+		if (blare_enabled && dentry && inode->i_op->setxattr) {
 			int rc;
 			/* Convert the shared lock into an exclusive lock
 			 * no race condition to be afraid of because the entire

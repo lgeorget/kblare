@@ -559,6 +559,7 @@ static int __init blare_install(void)
 	ret = blare_init_fs();
 	if (ret)
 		return ret;
+	blare_enabled = 0;
 	security_add_hooks(blare_hooks, ARRAY_SIZE(blare_hooks));
 	return 0;
 }
