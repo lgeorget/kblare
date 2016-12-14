@@ -1,15 +1,135 @@
 #include <linux/security.h>
 #include <linux/seq_file.h>
 #include <linux/stringify.h>
+#include <linux/msg.h>
 
 #include "blare.h"
 
 #define BLARE_TAGS_NUMBER_STR __stringify(BLARE_TAGS_NUMBER)
 
-static __u32 traced[BLARE_TAGS_NUMBER];
+static __u32 blare_traced[BLARE_TAGS_NUMBER];
 int blare_enabled;
 
-bool blare_is_traced(int tag)
+static char* __blare_print_file(struct file* file)
+{
+	int n = snprintf(NULL, 0, "%pd4", file->f_path.dentry);
+	char *str = kmalloc(n + 1, GFP_KERNEL);
+	if (!str)
+		return ERR_PTR(-ENOMEM);
+	snprintf(str, n, "%pd4", file->f_path.dentry);
+	str[n] = '\0';
+	return str;
+}
+
+static char* __blare_print_task(struct task_struct* p)
+{
+	int n = snprintf(NULL, 0, "process %i | %s", p->pid, p->comm);
+	char *str = kmalloc(n + 1, GFP_KERNEL);
+	if (!str)
+		return ERR_PTR(-ENOMEM);
+	snprintf(str, n, "process %i (%s)", p->pid, p->comm);
+	str[n] = '\0';
+	return str;
+}
+
+static char* __blare_print_msg(struct msg_msg* msg)
+{
+	int n = snprintf(NULL, 0, "msg %p", msg);
+	char *str = kmalloc(n + 1, GFP_KERNEL);
+	if (!str)
+		return ERR_PTR(-ENOMEM);
+	snprintf(str, n, "msg %p", msg);
+	str[n] = '\0';
+	return str;
+}
+
+static int __blare_trace_mm(int tag, struct mm_struct *mm, char *src_str)
+{
+	char *dest_str;
+	struct task_struct *p;
+	for_each_process(p) {
+		if (!p->mm || p->mm != mm)
+			continue;
+		dest_str = __blare_print_task(p);
+		if (IS_ERR(dest_str))
+			return PTR_ERR(dest_str);
+		pr_info("blare_trace: [itag %i]: %s -> %s (current: _%s(pid %d;cpu %d;parent %d)_)",
+				tag, src_str, dest_str, current->comm, current->pid, current->on_cpu, current->real_parent->pid);
+		kfree(dest_str);
+	}
+	return 0;
+}
+
+static int blare_trace(int tag, void *src, int source_type, void *dest, int dest_type)
+{
+	char *src_str;
+	struct task_struct *p;
+	int rc = 0;
+
+	if (source_type == BLARE_MM_TYPE) {
+		struct mm_struct *mm = (struct mm_struct*) src;
+		for_each_process(p) {
+			if (!p->mm || p->mm != mm)
+				continue;
+			src_str = __blare_print_task(p);
+			if (IS_ERR(src_str)) {
+				rc = PTR_ERR(src_str);
+				break;
+			}
+			if (dest_type == BLARE_MM_TYPE) {
+				struct mm_struct *dest_mm = (struct mm_struct*)dest;
+				rc = __blare_trace_mm(tag, dest_mm, src_str);
+				if (rc) {
+					kfree(src_str);
+					break;
+				}
+			} else {
+				char *dest_str = __blare_print_file((struct file*) dest);
+
+				if (IS_ERR(dest_str)) {
+					kfree(src_str);
+					rc = PTR_ERR(dest_str);
+					break;
+				}
+				pr_info("blare_trace: [itag %i]: %s -> %s (current: _%s(pid %d;cpu %d;parent %d)_)",
+					tag, src_str, dest_str, current->comm, current->pid, current->on_cpu, current->real_parent->pid);
+			}
+		}
+	} else {
+		if (source_type == BLARE_FILE_TYPE)
+			src_str = __blare_print_file((struct file*) src);
+		else
+			src_str = __blare_print_msg((struct msg_msg*) src);
+
+		if (IS_ERR(src_str)) {
+			rc = PTR_ERR(src_str);
+			goto end;
+		}
+
+		if (dest_type == BLARE_MM_TYPE) {
+			struct mm_struct *dest_mm = (struct mm_struct*)dest;
+			rc = __blare_trace_mm(tag, dest_mm, src_str);
+			if (rc)
+				goto end;
+		} else {
+			char *dest_str = __blare_print_file((struct file*) dest);
+
+			if (IS_ERR(dest_str)) {
+				rc = PTR_ERR(dest_str);
+				goto end;
+			}
+			pr_info("blare_trace: [itag %i]: %s -> %s (current: _%s(pid %d;cpu %d;parent %d)_)",
+					tag, src_str, dest_str, current->comm, current->pid, current->on_cpu, current->real_parent->pid);
+		}
+
+end:
+		kfree(src_str);
+	}
+
+	return rc;
+}
+
+static bool __is_traced(int tag)
 {
 	int index;
 	int offset;
@@ -19,7 +139,33 @@ bool blare_is_traced(int tag)
 
 	index = tag / 32;
 	offset = tag % 32;
-	return traced[index] & (1 << offset);
+	return blare_traced[index] & (1 << offset);
+}
+
+bool blare_is_traced(const struct info_tags* tags_added)
+{
+	int i;
+	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
+		if (tags_added->tags[i] & blare_traced[i])
+			return true;
+	return false;
+}
+
+int blare_trace_all(const struct info_tags* tags_added, void* src, int src_type,
+		void* dest, int dest_type)
+
+{
+	int tag;
+	int rc;
+	for (tag=0 ; tag<BLARE_TAGS_NUMBER * 32 ; tag++) {
+		if (unlikely(__is_traced(tag))) {
+			rc = blare_trace(tag, src, src_type, dest, dest_type);
+			if (rc)
+				return rc;
+		}
+	}
+
+	return 0;
 }
 
 int blare_tags_to_string(const __u32 *tag, char** buffer)
@@ -95,7 +241,7 @@ static int blare_fs_traced_show(struct seq_file *seq, void *v)
 	int i, j;
 	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++) {
 		for (j=0 ; j<32 ; j++) {
-			if (unlikely(traced[i] & (1 << j)))
+			if (unlikely(blare_traced[i] & (1 << j)))
 				seq_printf(seq, "%d ", i * 32 + j);
 		}
 	}
@@ -112,14 +258,14 @@ static void __blare_fs_mark_as_traced(int tag)
 {
 	int index = tag / 32;
 	int offset = tag % 32;
-	traced[index] |= 1 << offset;
+	blare_traced[index] |= 1 << offset;
 }
 
 static void __blare_fs_mark_as_untraced(int tag)
 {
 	int index = tag / 32;
 	int offset = tag % 32;
-	traced[index] &= ~(1 << offset);
+	blare_traced[index] &= ~(1 << offset);
 }
 
 static ssize_t __blare_fs_trace_untrace_write(struct file *file, const char __user *buf,

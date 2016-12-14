@@ -29,6 +29,10 @@ struct msg_msg;
 
 #define BLARE_TAGS_NUMBER CONFIG_SECURITY_BLARE_TAGS_SIZE
 
+#define BLARE_FILE_TYPE 0
+#define BLARE_MM_TYPE 1
+#define BLARE_MSG_TYPE 2
+
 /* defined in securityfs */
 extern int blare_enabled;
 
@@ -88,7 +92,9 @@ static inline void copy_tags(struct info_tags *dest, const struct info_tags *src
 
 /* securityfs.c */
 int blare_init_fs(void);
-bool is_traced(int tag);
+bool blare_is_traced(const struct info_tags* tags_added);
+int blare_trace_all(const struct info_tags* tags_added, void* src, int src_type,
+		void* dest, int dest_type);
 int blare_tags_to_string(const __u32 *tag, char** buffer);
 int blare_tags_from_string(const char* buf, size_t length, __u32 *tag);
 #endif // _BLARE_H

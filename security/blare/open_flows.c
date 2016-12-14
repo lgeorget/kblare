@@ -27,8 +27,6 @@
 #include "blare.h"
 
 #define BLARE_HASHTABLE_SHIFT 10
-#define BLARE_FILE_TYPE 0
-#define BLARE_MM_TYPE 1
 
 struct async_task_freer
 {
@@ -47,7 +45,8 @@ struct discrete_flow {
 		struct file *file;
 		struct mm_struct *mm;
 	} dest;
-	int type;
+	int src_type;
+	int dest_type;
 	struct hlist_node by_src; /* table of enabled flows, by source */
 	struct hlist_node by_task; /* table of enabled flows, by responsible task_struct* */
 };
@@ -62,7 +61,8 @@ struct bfs_elt {
 		struct file *file;
 		struct mm_struct *mm;
 	} dest;
-	int type;
+	int src_type;
+	int dest_type;
 	struct list_head list; /* list of bfs_elt to visit */
 };
 
@@ -102,8 +102,9 @@ static int get_mms_for_file(struct file *file, struct list_head *visit_list)
 		}
 
 		elt->src.file = file;
+		elt->src_type = BLARE_FILE_TYPE;
 		elt->dest.mm = mm;
-		elt->type = BLARE_MM_TYPE;
+		elt->dest_type = BLARE_MM_TYPE;
 		BUG_ON(!mm->m_sec);
 		list_add_tail(&elt->list, visit_list);
 	}
@@ -138,8 +139,9 @@ static int get_files_for_mm(struct mm_struct *mm, struct list_head *visit_list)
 
 		get_file(file);
 		elt->src.mm = mm;
+		elt->src_type = BLARE_FILE_TYPE;
 		elt->dest.file = file;
-		elt->type = BLARE_FILE_TYPE;
+		elt->dest_type = BLARE_FILE_TYPE;
 		list_add_tail(&elt->list, visit_list);
 
 	}
@@ -158,7 +160,7 @@ static int get_discrete_flows_for_file(struct file *file, struct list_head *visi
 	hash_for_each_possible(enabled_flows_by_src, flow, by_src, key) {
 		struct mm_struct *mm;
 		// Check if the flow in the bucket is not for another key
-		if (flow->type != BLARE_MM_TYPE ||
+		if (flow->dest_type != BLARE_MM_TYPE ||
 		    file_inode(flow->src.file) != inode)
 			continue;
 
@@ -169,8 +171,9 @@ static int get_discrete_flows_for_file(struct file *file, struct list_head *visi
 			return -ENOMEM;
 		atomic_inc(&mm->mm_users);
 		elt->src.file = file;
+		elt->src_type = BLARE_FILE_TYPE;
 		elt->dest.mm = mm;
-		elt->type = BLARE_MM_TYPE;
+		elt->dest_type = BLARE_MM_TYPE;
 		list_add_tail(&elt->list, visit_list);
 	}
 	return 0;
@@ -185,7 +188,7 @@ static int get_discrete_flows_for_mm(struct mm_struct *mm, struct list_head *vis
 	hash_for_each_possible(enabled_flows_by_src, flow, by_src, key) {
 		struct file *file;
 		// Check if the flow in the bucket is not for another key
-		if (flow->type != BLARE_FILE_TYPE ||
+		if (flow->dest_type != BLARE_FILE_TYPE ||
 		    flow->src.mm != mm)
 			continue;
 
@@ -196,8 +199,9 @@ static int get_discrete_flows_for_mm(struct mm_struct *mm, struct list_head *vis
 
 		get_file(file);
 		elt->src.mm = mm;
+		elt->src_type = BLARE_MM_TYPE;
 		elt->dest.file = file;
-		elt->type = BLARE_FILE_TYPE;
+		elt->dest_type = BLARE_FILE_TYPE;
 		list_add_tail(&elt->list, visit_list);
 	}
 	return 0;
@@ -270,6 +274,17 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list, co
 	return ret;
 }
 
+static void __trace_all(const struct info_tags *tags, const struct bfs_elt *flow)
+{
+	void *src = flow->src_type == BLARE_MM_TYPE     ?    (void*) flow->src.mm :
+		    flow->src_type == BLARE_FILE_TYPE   ?    (void*) flow->src.file :
+		 /* flow->src_type == BLARE_MSG_TYPE    ? */ (void*) flow->src.msg;
+	void *dest = flow->dest_type == BLARE_MM_TYPE   ?    (void*) flow->dest.mm :
+	         /*  flow->dest_type == BLARE_FILE_TYPE ? */ (void*) flow->dest.file;
+
+	blare_trace_all(tags, src, flow->src_type, dest, flow->dest_type);
+}
+
 static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags *new_tags)
 {
 	LIST_HEAD(visit_list);
@@ -278,7 +293,7 @@ static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags 
 
 	list_add(&new_flow->list, &visit_list);
 	list_for_each_entry(next, &visit_list, list) {
-		if (next->type == BLARE_FILE_TYPE) {
+		if (next->dest_type == BLARE_FILE_TYPE) {
 			struct file *file = next->dest.file;
 			struct inode *inode = file_inode(file);
 			inode_lock_shared(inode);
@@ -293,6 +308,12 @@ static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags 
 
 		if (ret)
 			goto free_all_and_abort;
+
+		/* blare_trace_all can fail with ENOMEM but that's not
+		 * critical, we might just lose a few trace messages
+		 * silently */
+		if (unlikely(blare_is_traced(new_tags)))
+			__trace_all(new_tags, next);
 	}
 
 free_all_and_abort:
@@ -326,8 +347,9 @@ static int __register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 	BUG_ON(!atomic_inc_not_zero(&mm->mm_users));
 	BUG_ON(!mm->m_sec);
 	first_flow->src.file = file;
+	first_flow->src_type = BLARE_FILE_TYPE;
 	first_flow->dest.mm = mm;
-	first_flow->type = BLARE_MM_TYPE;
+	first_flow->dest_type = BLARE_MM_TYPE;
 	return __register_new_flow(first_flow, &isec->info);
 }
 
@@ -359,8 +381,9 @@ static int __register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 
 	get_file(file);
 	first_flow->src.mm = mm;
+	first_flow->src_type = BLARE_MM_TYPE;
 	first_flow->dest.file = file;
-	first_flow->type = BLARE_FILE_TYPE;
+	first_flow->dest_type = BLARE_FILE_TYPE;
 	return __register_new_flow(first_flow, &msec->info);
 }
 
@@ -392,8 +415,9 @@ static int __register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 
 	atomic_inc(&mm->mm_users);
 	first_flow->src.msg = msg;
+	first_flow->src_type = BLARE_MSG_TYPE;
 	first_flow->dest.mm = mm;
-	first_flow->type = BLARE_MM_TYPE;
+	first_flow->dest_type = BLARE_MM_TYPE;
 	return __register_new_flow(first_flow, &msgsec->info);
 }
 
@@ -422,8 +446,9 @@ static int __register_new_tags_for_mm(const struct info_tags *new_tags, struct m
 
 	atomic_inc(&mm->mm_users);
 	first_flow->src.mm = current->mm;
+	first_flow->src_type = BLARE_MM_TYPE;
 	first_flow->dest.mm = mm;
-	first_flow->type = BLARE_MM_TYPE;
+	first_flow->dest_type = BLARE_MM_TYPE;
 	return __register_new_flow(first_flow, new_tags);
 }
 
@@ -451,8 +476,9 @@ int register_read(struct file *file)
 	atomic_inc(&mm->mm_users);
 	flow->resp = current;
 	flow->src.file = file;
+	flow->src_type = BLARE_FILE_TYPE;
 	flow->dest.mm = mm;
-	flow->type = BLARE_MM_TYPE;
+	flow->dest_type = BLARE_MM_TYPE;
 	INIT_HLIST_NODE(&flow->by_src);
 	INIT_HLIST_NODE(&flow->by_task);
 
@@ -479,8 +505,9 @@ int register_write(struct file *file)
 	get_file(file);
 	flow->resp = current;
 	flow->src.mm = mm;
+	flow->src_type = BLARE_MM_TYPE;
 	flow->dest.file = file;
-	flow->type = BLARE_FILE_TYPE;
+	flow->dest_type = BLARE_FILE_TYPE;
 	INIT_HLIST_NODE(&flow->by_src);
 	INIT_HLIST_NODE(&flow->by_task);
 
@@ -506,8 +533,9 @@ int register_msg_reception(struct msg_msg *msg)
 	atomic_inc(&mm->mm_users);
 	flow->resp = current;
 	flow->src.msg = msg;
+	flow->src_type = BLARE_FILE_TYPE;
 	flow->dest.mm = mm;
-	flow->type = BLARE_MM_TYPE;
+	flow->dest_type = BLARE_MM_TYPE;
 	INIT_HLIST_NODE(&flow->by_src);
 	INIT_HLIST_NODE(&flow->by_task);
 
@@ -526,7 +554,7 @@ static void unregister_task_flow(struct task_struct *p)
 		if (flow->resp == p) {
 			hash_del(&flow->by_task);
 			hash_del(&flow->by_src);
-			if (flow->type == BLARE_FILE_TYPE)
+			if (flow->dest_type == BLARE_FILE_TYPE)
 				fput(flow->dest.file);
 			else
 				mmput(flow->dest.mm);
