@@ -16,8 +16,7 @@ static char* __blare_print_file(struct file* file)
 	char *str = kmalloc(n + 1, GFP_KERNEL);
 	if (!str)
 		return ERR_PTR(-ENOMEM);
-	snprintf(str, n, "%pd4", file->f_path.dentry);
-	str[n] = '\0';
+	snprintf(str, n + 1, "%pd4", file->f_path.dentry);
 	return str;
 }
 
@@ -27,8 +26,7 @@ static char* __blare_print_task(struct task_struct* p)
 	char *str = kmalloc(n + 1, GFP_KERNEL);
 	if (!str)
 		return ERR_PTR(-ENOMEM);
-	snprintf(str, n, "process %i (%s)", p->pid, p->comm);
-	str[n] = '\0';
+	snprintf(str, n + 1, "process %i | %s", p->pid, p->comm);
 	return str;
 }
 
@@ -38,8 +36,7 @@ static char* __blare_print_msg(struct msg_msg* msg)
 	char *str = kmalloc(n + 1, GFP_KERNEL);
 	if (!str)
 		return ERR_PTR(-ENOMEM);
-	snprintf(str, n, "msg %p", msg);
-	str[n] = '\0';
+	snprintf(str, n + 1, "msg %p", msg);
 	return str;
 }
 
