@@ -220,15 +220,14 @@ static void propagate_tags(struct info_tags *dest, const struct info_tags *src,
 	}
 }
 
-static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, const struct info_tags *tags)
+static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, const struct info_tags *tags, struct info_tags *tags_added)
 {
 	struct blare_mm_sec *msec = mm->m_sec;
-	struct info_tags new_tags;
 	int ret = 0;
 
-	propagate_tags(&msec->info, tags, &new_tags);
+	propagate_tags(&msec->info, tags, tags_added);
 
-	if (tags_count(&new_tags) > 0) {
+	if (tags_count(tags_added) > 0) {
 		ret = get_files_for_mm(mm, visit_list);
 		if (!ret)
 			ret = get_discrete_flows_for_mm(mm, visit_list);
@@ -237,16 +236,15 @@ static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, c
 	return ret;
 }
 
-static int propagate_to_file(struct file *file, struct list_head *visit_list, const struct info_tags *tags)
+static int propagate_to_file(struct file *file, struct list_head *visit_list, const struct info_tags *tags, struct info_tags *tags_added)
 {
 	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
-	struct info_tags new_tags;
 	int ret = 0;
 
-	propagate_tags(&isec->info, tags, &new_tags);
+	propagate_tags(&isec->info, tags, tags_added);
 
-	if (tags_count(&new_tags) > 0) {
+	if (tags_count(tags_added) > 0) {
 		struct dentry *dentry = dget(file_dentry(file));
 		if (blare_enabled && dentry && inode->i_op->setxattr) {
 			int rc;
@@ -289,6 +287,7 @@ static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags 
 {
 	LIST_HEAD(visit_list);
 	struct bfs_elt *next, *temp;
+	struct info_tags tags_added;
 	int ret = 0;
 
 	list_add(&new_flow->list, &visit_list);
@@ -297,12 +296,12 @@ static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags 
 			struct file *file = next->dest.file;
 			struct inode *inode = file_inode(file);
 			inode_lock_shared(inode);
-			ret = propagate_to_file(file, &visit_list, new_tags);
+			ret = propagate_to_file(file, &visit_list, new_tags, &tags_added);
 			inode_unlock_shared(inode);
 			fput(file);
 		} else {
 			struct mm_struct *mm = next->dest.mm;
-			ret = propagate_to_mm(mm, &visit_list, new_tags);
+			ret = propagate_to_mm(mm, &visit_list, new_tags, &tags_added);
 			mmput(mm);
 		}
 
@@ -312,7 +311,7 @@ static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags 
 		/* blare_trace_all can fail with ENOMEM but that's not
 		 * critical, we might just lose a few trace messages
 		 * silently */
-		if (unlikely(blare_is_traced(new_tags)))
+		if (unlikely(blare_is_traced(&tags_added)))
 			__trace_all(new_tags, next);
 	}
 
