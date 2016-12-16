@@ -102,8 +102,19 @@ static int blare_inode_setxattr(struct dentry *dentry, const char *name,
 		if (!uid_eq(current_fsuid(), inode->i_uid) &&
 		    !capable(CAP_MAC_ADMIN))
 			return -EPERM;
-		else
+		else {
+			if (size % sizeof(__u32))
+				return -EINVAL;
+			if (size > BLARE_TAGS_NUMBER * sizeof(__u32)) {
+				pr_err("Blare: The tags are too large for this system.\n"
+				       "Consider compiling your kernel with "
+				       "CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu or more.",
+					size/sizeof(__u32));
+				return -EINVAL;
+			}
+
 			return 0;
+		}
 	}
 
 	/* general case */
@@ -180,6 +191,16 @@ static int blare_inode_setsecurity(struct inode *inode, const char *name,
 	if (!inode || !inode->i_security) {
 		pr_warn("No security attached to the inode!");
 		return -ENODATA;
+	}
+
+	if (size % sizeof(__u32))
+		return -EINVAL;
+	if (size > BLARE_TAGS_NUMBER * sizeof(__u32)) {
+		pr_err("Blare: The tags are too large for this system.\n"
+				"Consider compiling your kernel with "
+				"CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu or more.",
+				size/sizeof(__u32));
+		return -EINVAL;
 	}
 
 	isec = inode->i_security;
@@ -319,6 +340,12 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 	if (rc <= 0) /* no xattrs available or no tags */
 		goto dput;
 
+	if (rc % sizeof(__u32)) {
+		pr_err("Blare: tags of file %pd2 have been corrupted on disk",
+		       dentry);
+		goto dput;
+	}
+
 	if (rc <= BLARE_TAGS_NUMBER * sizeof(__u32)) {
 		int i,j;
 		rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG,
@@ -336,7 +363,7 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 		pr_err("Blare: file %pd2 comes from a system where tags are "
 		       "longer.\nConsider compiling your kernel with "
 		       "CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu or more.",
-		       dentry, rc/sizeof(32));
+		       dentry, rc/sizeof(__u32));
 		rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG,
 					   isec->info.tags,
 					   BLARE_TAGS_NUMBER * sizeof(__u32));
@@ -353,6 +380,7 @@ static void blare_inode_post_setxattr(struct dentry *dentry, const char *name,
 {
 	struct inode *inode = d_backing_inode(dentry);
 	struct blare_inode_sec *isec;
+	int i,j;
 
 	if (strcmp(name, BLARE_XATTR_TAG) != 0)
 		return;
@@ -362,9 +390,16 @@ static void blare_inode_post_setxattr(struct dentry *dentry, const char *name,
 		pr_err("Blare: missing inode security structure");
 		return;
 	}
-
-	WARN_ON(size != sizeof(__u32) * BLARE_TAGS_NUMBER);
-	memcpy(isec->info.tags, value, size);
+	/* Pad with 0 if the tags are smaller than expected, truncate
+	 * if they are bigger */
+	if (size >= BLARE_TAGS_NUMBER*sizeof(__u32)) {
+		memcpy(isec->info.tags, value, BLARE_TAGS_NUMBER*sizeof(__u32));
+	} else {
+		memcpy(isec->info.tags, value, size);
+		for (i=size/sizeof(__u32), j=size ; j<BLARE_TAGS_NUMBER ;
+				i++, j+=sizeof(__u32))
+			isec->info.tags[i] = 0;
+	}
 }
 
 static int blare_mm_dup_security(struct mm_struct *mm, struct mm_struct *oldmm)
