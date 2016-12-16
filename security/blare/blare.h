@@ -97,4 +97,9 @@ int blare_trace_all(const struct info_tags* tags_added, void* src, int src_type,
 		void* dest, int dest_type);
 int blare_tags_to_string(const __u32 *tag, char** buffer);
 int blare_tags_from_string(const char* buf, size_t length, __u32 *tag);
+
+/* Tag 0 stops the propagation, and doesn't propagate */
+static inline bool blare_stop_propagate(const struct info_tags* tags) {
+	return (tags->tags[0] & 1);
+}
 #endif // _BLARE_H
