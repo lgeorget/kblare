@@ -139,7 +139,7 @@ static int get_files_for_mm(struct mm_struct *mm, struct list_head *visit_list)
 
 		get_file(file);
 		elt->src.mm = mm;
-		elt->src_type = BLARE_FILE_TYPE;
+		elt->src_type = BLARE_MM_TYPE;
 		elt->dest.file = file;
 		elt->dest_type = BLARE_FILE_TYPE;
 		list_add_tail(&elt->list, visit_list);
