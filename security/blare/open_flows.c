@@ -213,7 +213,7 @@ static void propagate_tags(struct info_tags *dest, const struct info_tags *src,
 	int i;
 
 	/* short-circuit */
-	if (blare_stop_propagate(src)) {
+	if (blare_stop_propagate(src) || blare_stop_propagate(dest)) {
 		for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
 			tags_added->tags[i] = 0;
 		return;
@@ -319,8 +319,7 @@ static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags 
 		/* blare_trace_all can fail with ENOMEM but that's not
 		 * critical, we might just lose a few trace messages
 		 * silently */
-		if (!blare_stop_propagate(new_tags) &&
-		    unlikely(blare_is_traced(&tags_added)))
+		if (unlikely(blare_is_traced(&tags_added)))
 			__trace_all(new_tags, next);
 	}
 
