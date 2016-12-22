@@ -124,7 +124,7 @@ static int get_files_for_mm(struct mm_struct *mm, struct list_head *visit_list)
 	/* only VM_SHARED with a vm_file */
 	down_read(&mm->mmap_sem);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if (!(vma->vm_flags & VM_SHARED) || !vma->vm_file)
+		if (!(vma->vm_flags & VM_SHARED) || !(vma->vm_flags & VM_WRITE) || !vma->vm_file)
 			continue;
 
 		file = vma->vm_file;

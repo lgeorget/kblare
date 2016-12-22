@@ -529,7 +529,7 @@ static int blare_mmap_file(struct file *file, unsigned long reqprot,
 		return 0;
 
 	ret = register_flow_file_to_mm(file, current->mm);
-	if (!ret && (prot & PROT_WRITE) && (flags & VM_SHARED))
+	if (!ret && (prot & PROT_WRITE) && (flags & MAP_SHARED))
 		ret = register_flow_mm_to_file(current->mm, file);
 
 	return ret;
