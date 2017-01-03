@@ -69,7 +69,7 @@ static void blare_bprm_committing_creds(struct linux_binprm *bprm)
 	bprm->cred->security = NULL;
 }
 
-static int blare_inode_alloc_security(struct inode* inode)
+static int blare_inode_alloc_security(struct inode *inode)
 {
 	struct blare_inode_sec *isec;
 
@@ -83,7 +83,7 @@ static int blare_inode_alloc_security(struct inode* inode)
 	return 0;
 }
 
-static void blare_inode_free_security(struct inode* inode)
+static void blare_inode_free_security(struct inode *inode)
 {
 	struct blare_inode_sec *isec = inode->i_security;
 	kfree(isec);
@@ -106,10 +106,13 @@ static int blare_inode_setxattr(struct dentry *dentry, const char *name,
 			if (size % sizeof(__u32))
 				return -EINVAL;
 			if (size > BLARE_TAGS_NUMBER * sizeof(__u32)) {
-				pr_err("Blare: The tags are too large for this system.\n"
-				       "Consider compiling your kernel with "
-				       "CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu or more.",
-					size/sizeof(__u32));
+				pr_err(
+				     "Blare: The tags are too large for this "
+				     "system.\n"
+				     "Consider compiling your kernel with "
+				     "CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu "
+				     "or more.",
+				     size / sizeof(__u32));
 				return -EINVAL;
 			}
 
@@ -133,7 +136,8 @@ static int blare_inode_removexattr(struct dentry *dentry, const char *name)
 			return -EPERM;
 		} else {
 			if (inode->i_security) {
-				struct blare_inode_sec *isec = inode->i_security;
+				struct blare_inode_sec *isec =
+				    inode->i_security;
 				initialize_tags(&isec->info);
 			}
 			return 0;
@@ -144,7 +148,8 @@ static int blare_inode_removexattr(struct dentry *dentry, const char *name)
 	return cap_inode_removexattr(dentry, name);
 }
 
-static int blare_inode_getsecurity(struct inode *inode, const char *name, void **buffer, bool alloc)
+static int blare_inode_getsecurity(struct inode *inode, const char *name,
+				   void **buffer, bool alloc)
 {
 	struct blare_inode_sec *isec;
 	int size = 0;
@@ -197,16 +202,16 @@ static int blare_inode_setsecurity(struct inode *inode, const char *name,
 		return -EINVAL;
 	if (size > BLARE_TAGS_NUMBER * sizeof(__u32)) {
 		pr_err("Blare: The tags are too large for this system.\n"
-				"Consider compiling your kernel with "
-				"CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu or more.",
-				size/sizeof(__u32));
+		       "Consider compiling your kernel with "
+		       "CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu or more.",
+		       size / sizeof(__u32));
 		return -EINVAL;
 	}
 
 	isec = inode->i_security;
 	tags_value = value;
 
-	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
+	for (i = 0; i < BLARE_TAGS_NUMBER; i++)
 		isec->info.tags[i] = tags_value[i];
 
 	return 0;
@@ -219,17 +224,17 @@ static int blare_file_permission(struct file *file, int mask)
 	struct blare_mm_sec *msec;
 	int ret = 0;
 	char pathbuffer[256];
-	char * path;
+	char *path;
 
-	if (!mask) /* an existence check is not a flow */
+	if (!mask)		/* an existence check is not a flow */
 		return 0;
 
 	if (!current->mm)
-		return 0; /* kernel threads do not propagate flows */
+		return 0;	/* kernel threads do not propagate flows */
 
 	msec = current->mm->m_sec;
-	if (!msec || !isec) /* the FS is not fully initialized or the task */
-		return 0;   /* is privileged */
+	if (!msec || !isec)	/* the FS is not fully initialized or the task */
+		return 0;	/* is privileged */
 
 	if (mask & MAY_READ) {
 		path = d_path(&file->f_path, pathbuffer, 256);
@@ -239,7 +244,7 @@ static int blare_file_permission(struct file *file, int mask)
 
 	if (!ret && (mask & MAY_APPEND || mask & MAY_WRITE)) {
 		/*struct dentry *dentry = file_dentry(file);
-		dget(dentry);*/
+		   dget(dentry); */
 		path = d_path(&file->f_path, pathbuffer, 256);
 		pr_debug("kblare writing %s\n", path);
 		ret = register_write(file);
@@ -248,7 +253,8 @@ static int blare_file_permission(struct file *file, int mask)
 	return ret;
 }
 
-static int blare_socket_sendmsg(struct socket *socket, struct msghdr *msg, int size)
+static int blare_socket_sendmsg(struct socket *socket, struct msghdr *msg,
+				int size)
 {
 	struct file *file = socket->file;
 	struct inode *inode = SOCK_INODE(socket);
@@ -267,7 +273,8 @@ static int blare_socket_sendmsg(struct socket *socket, struct msghdr *msg, int s
 	return register_write(file);
 }
 
-static int blare_socket_recvmsg(struct socket *socket, struct msghdr *msg, int size, int flags)
+static int blare_socket_recvmsg(struct socket *socket, struct msghdr *msg,
+				int size, int flags)
 {
 	struct file *file;
 	struct inode *inode;
@@ -304,7 +311,7 @@ static int blare_socket_recvmsg(struct socket *socket, struct msghdr *msg, int s
 		rc = register_read(file);
 put_sock:
 		sock_put(peer);
-	} /* else ? */
+	}			/* else ? */
 	return rc;
 }
 
@@ -332,12 +339,13 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 
 	dentry = dget(opt_dentry);
 	if (!dentry) {
-		pr_info("Void dentry: %s : %p (%p)\n", __func__, dentry, opt_dentry);
+		pr_info("Void dentry: %s : %p (%p)\n", __func__, dentry,
+			opt_dentry);
 		return;
 	}
 
 	rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG, NULL, 0);
-	if (rc <= 0) /* no xattrs available or no tags */
+	if (rc <= 0)		/* no xattrs available or no tags */
 		goto dput;
 
 	if (rc % sizeof(__u32)) {
@@ -347,7 +355,7 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 	}
 
 	if (rc <= BLARE_TAGS_NUMBER * sizeof(__u32)) {
-		int i,j;
+		int i, j;
 		rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG,
 					   isec->info.tags, rc);
 
@@ -356,14 +364,14 @@ static void blare_d_instantiate(struct dentry *opt_dentry, struct inode *inode)
 		 * last got a new tag)
 		 * we could also refresh the xattrs on disk while we are at it
 		 * but is it really necessary? */
-		for (i=rc/sizeof(__u32), j=rc ; j<BLARE_TAGS_NUMBER ;
-		     i++, j+=sizeof(__u32))
+		for (i = rc / sizeof(__u32), j = rc; j < BLARE_TAGS_NUMBER;
+		     i++, j += sizeof(__u32))
 			isec->info.tags[i] = 0;
 	} else {
 		pr_err("Blare: file %pd2 comes from a system where tags are "
 		       "longer.\nConsider compiling your kernel with "
 		       "CONFIG_SECURITY_BLARE_TAGS_SIZE = %lu or more.",
-		       dentry, rc/sizeof(__u32));
+		       dentry, rc / sizeof(__u32));
 		rc = inode->i_op->getxattr(dentry, inode, BLARE_XATTR_TAG,
 					   isec->info.tags,
 					   BLARE_TAGS_NUMBER * sizeof(__u32));
@@ -375,12 +383,11 @@ dput:
 }
 
 static void blare_inode_post_setxattr(struct dentry *dentry, const char *name,
-				      const void *value, size_t size,
-				      int flags)
+				      const void *value, size_t size, int flags)
 {
 	struct inode *inode = d_backing_inode(dentry);
 	struct blare_inode_sec *isec;
-	int i,j;
+	int i, j;
 
 	if (strcmp(name, BLARE_XATTR_TAG) != 0)
 		return;
@@ -392,12 +399,13 @@ static void blare_inode_post_setxattr(struct dentry *dentry, const char *name,
 	}
 	/* Pad with 0 if the tags are smaller than expected, truncate
 	 * if they are bigger */
-	if (size >= BLARE_TAGS_NUMBER*sizeof(__u32)) {
-		memcpy(isec->info.tags, value, BLARE_TAGS_NUMBER*sizeof(__u32));
+	if (size >= BLARE_TAGS_NUMBER * sizeof(__u32)) {
+		memcpy(isec->info.tags, value,
+		       BLARE_TAGS_NUMBER * sizeof(__u32));
 	} else {
 		memcpy(isec->info.tags, value, size);
-		for (i=size/sizeof(__u32), j=size ; j<BLARE_TAGS_NUMBER ;
-				i++, j+=sizeof(__u32))
+		for (i = size / sizeof(__u32), j = size; j < BLARE_TAGS_NUMBER;
+		     i++, j += sizeof(__u32))
 			isec->info.tags[i] = 0;
 	}
 }
@@ -603,7 +611,8 @@ static int blare_setprocattr(struct task_struct *p, char *name,
 	if (!msec)
 		return -ENODATA;
 
-	if ((nbytes = blare_tags_from_string((char*) value, size, new_tags.tags)) < size)
+	if ((nbytes =
+	     blare_tags_from_string((char *)value, size, new_tags.tags)) < size)
 		return -EINVAL;
 
 	/* it is impossible to remove tags, you can only add some */
@@ -615,30 +624,30 @@ static int blare_setprocattr(struct task_struct *p, char *name,
 }
 
 static struct security_hook_list blare_hooks[] = {
-	LSM_HOOK_INIT(inode_alloc_security,blare_inode_alloc_security),
-	LSM_HOOK_INIT(inode_free_security,blare_inode_free_security),
-	LSM_HOOK_INIT(inode_getsecurity,blare_inode_getsecurity),
-	LSM_HOOK_INIT(inode_setsecurity,blare_inode_setsecurity),
-	LSM_HOOK_INIT(d_instantiate,blare_d_instantiate),
-	LSM_HOOK_INIT(inode_post_setxattr,blare_inode_post_setxattr),
-	LSM_HOOK_INIT(inode_setxattr,blare_inode_setxattr),
-	LSM_HOOK_INIT(inode_removexattr,blare_inode_removexattr),
-	LSM_HOOK_INIT(release_secctx,blare_release_secctx),
-	LSM_HOOK_INIT(bprm_set_creds,blare_bprm_set_creds),
-	LSM_HOOK_INIT(bprm_committing_creds,blare_bprm_committing_creds),
-	LSM_HOOK_INIT(file_permission,blare_file_permission),
-	LSM_HOOK_INIT(socket_sendmsg,blare_socket_sendmsg),
-	LSM_HOOK_INIT(socket_recvmsg,blare_socket_recvmsg),
-	LSM_HOOK_INIT(syscall_before_return,unregister_current_flow),
-	LSM_HOOK_INIT(mm_dup_security,blare_mm_dup_security),
-	LSM_HOOK_INIT(mm_sec_free,blare_mm_sec_free),
-	LSM_HOOK_INIT(mq_store_msg,blare_mq_store_msg),
-	LSM_HOOK_INIT(msg_msg_alloc_security,blare_msg_msg_alloc_security),
-	LSM_HOOK_INIT(msg_msg_free_security,blare_msg_msg_free_security),
-	LSM_HOOK_INIT(ptrace_access_check,blare_ptrace_access_check),
-	LSM_HOOK_INIT(ptrace_traceme,blare_ptrace_traceme),
-	LSM_HOOK_INIT(ptrace_unlink,blare_ptrace_unlink),
-	LSM_HOOK_INIT(task_free,blare_task_free),
+	LSM_HOOK_INIT(inode_alloc_security, blare_inode_alloc_security),
+	LSM_HOOK_INIT(inode_free_security, blare_inode_free_security),
+	LSM_HOOK_INIT(inode_getsecurity, blare_inode_getsecurity),
+	LSM_HOOK_INIT(inode_setsecurity, blare_inode_setsecurity),
+	LSM_HOOK_INIT(d_instantiate, blare_d_instantiate),
+	LSM_HOOK_INIT(inode_post_setxattr, blare_inode_post_setxattr),
+	LSM_HOOK_INIT(inode_setxattr, blare_inode_setxattr),
+	LSM_HOOK_INIT(inode_removexattr, blare_inode_removexattr),
+	LSM_HOOK_INIT(release_secctx, blare_release_secctx),
+	LSM_HOOK_INIT(bprm_set_creds, blare_bprm_set_creds),
+	LSM_HOOK_INIT(bprm_committing_creds, blare_bprm_committing_creds),
+	LSM_HOOK_INIT(file_permission, blare_file_permission),
+	LSM_HOOK_INIT(socket_sendmsg, blare_socket_sendmsg),
+	LSM_HOOK_INIT(socket_recvmsg, blare_socket_recvmsg),
+	LSM_HOOK_INIT(syscall_before_return, unregister_current_flow),
+	LSM_HOOK_INIT(mm_dup_security, blare_mm_dup_security),
+	LSM_HOOK_INIT(mm_sec_free, blare_mm_sec_free),
+	LSM_HOOK_INIT(mq_store_msg, blare_mq_store_msg),
+	LSM_HOOK_INIT(msg_msg_alloc_security, blare_msg_msg_alloc_security),
+	LSM_HOOK_INIT(msg_msg_free_security, blare_msg_msg_free_security),
+	LSM_HOOK_INIT(ptrace_access_check, blare_ptrace_access_check),
+	LSM_HOOK_INIT(ptrace_traceme, blare_ptrace_traceme),
+	LSM_HOOK_INIT(ptrace_unlink, blare_ptrace_unlink),
+	LSM_HOOK_INIT(task_free, blare_task_free),
 	LSM_HOOK_INIT(mmap_file, blare_mmap_file),
 	LSM_HOOK_INIT(file_mprotect, blare_file_mprotect),
 	LSM_HOOK_INIT(getprocattr, blare_getprocattr),

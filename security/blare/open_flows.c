@@ -28,8 +28,7 @@
 
 #define BLARE_HASHTABLE_SHIFT 10
 
-struct async_task_freer
-{
+struct async_task_freer {
 	struct task_struct *task;
 	struct work_struct work;
 };
@@ -47,8 +46,8 @@ struct discrete_flow {
 	} dest;
 	int src_type;
 	int dest_type;
-	struct hlist_node by_src; /* table of enabled flows, by source */
-	struct hlist_node by_task; /* table of enabled flows, by responsible task_struct* */
+	struct hlist_node by_src;	/* table of enabled flows, by source */
+	struct hlist_node by_task;	/* table of enabled flows, by responsible task_struct* */
 };
 
 struct bfs_elt {
@@ -63,10 +62,10 @@ struct bfs_elt {
 	} dest;
 	int src_type;
 	int dest_type;
-	struct list_head list; /* list of bfs_elt to visit */
+	struct list_head list;	/* list of bfs_elt to visit */
 };
 
-static DEFINE_HASHTABLE(enabled_flows_by_src , BLARE_HASHTABLE_SHIFT);
+static DEFINE_HASHTABLE(enabled_flows_by_src, BLARE_HASHTABLE_SHIFT);
 static DEFINE_HASHTABLE(enabled_flows_by_task, BLARE_HASHTABLE_SHIFT);
 static DEFINE_MUTEX(flows_lock);
 
@@ -79,8 +78,7 @@ static int get_mms_for_file(struct file *file, struct list_head *visit_list)
 	int ret = 0;
 
 	i_mmap_lock_read(maps);
-	vma_interval_tree_foreach(vma, &maps->i_mmap, 0, ULONG_MAX)
-	{
+	vma_interval_tree_foreach(vma, &maps->i_mmap, 0, ULONG_MAX) {
 		/* all vma-s are relevant here, we take a ref on the mm and we
 		 * place it on the list of stuff to visit */
 		struct mm_struct *mm = vma->vm_mm;
@@ -89,7 +87,7 @@ static int get_mms_for_file(struct file *file, struct list_head *visit_list)
 		if (!mm || !atomic_inc_not_zero(&mm->mm_users))
 			continue;
 
-		if(!mm->m_sec) {
+		if (!mm->m_sec) {
 			mmput(mm);
 			continue;
 		}
@@ -124,7 +122,8 @@ static int get_files_for_mm(struct mm_struct *mm, struct list_head *visit_list)
 	/* only VM_SHARED with a vm_file */
 	down_read(&mm->mmap_sem);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if (!(vma->vm_flags & VM_SHARED) || !(vma->vm_flags & VM_WRITE) || !vma->vm_file)
+		if (!(vma->vm_flags & VM_SHARED) || !(vma->vm_flags & VM_WRITE)
+		    || !vma->vm_file)
 			continue;
 
 		file = vma->vm_file;
@@ -150,13 +149,14 @@ unlock:
 	return ret;
 }
 
-static int get_discrete_flows_for_file(struct file *file, struct list_head *visit_list)
+static int get_discrete_flows_for_file(struct file *file,
+				       struct list_head *visit_list)
 {
 	struct discrete_flow *flow;
 	struct bfs_elt *elt;
 	struct inode *inode = file_inode(file);
 	u64 key = (u64) inode;
-	pr_debug("kblare: key for inode %llu\n",key);
+	pr_debug("kblare: key for inode %llu\n", key);
 	hash_for_each_possible(enabled_flows_by_src, flow, by_src, key) {
 		struct mm_struct *mm;
 		// Check if the flow in the bucket is not for another key
@@ -179,17 +179,17 @@ static int get_discrete_flows_for_file(struct file *file, struct list_head *visi
 	return 0;
 }
 
-static int get_discrete_flows_for_mm(struct mm_struct *mm, struct list_head *visit_list)
+static int get_discrete_flows_for_mm(struct mm_struct *mm,
+				     struct list_head *visit_list)
 {
 	struct discrete_flow *flow;
 	struct bfs_elt *elt;
 	u64 key = (u64) mm;
-	pr_debug("kblare: key for mm %llu\n",key);
+	pr_debug("kblare: key for mm %llu\n", key);
 	hash_for_each_possible(enabled_flows_by_src, flow, by_src, key) {
 		struct file *file;
 		// Check if the flow in the bucket is not for another key
-		if (flow->dest_type != BLARE_FILE_TYPE ||
-		    flow->src.mm != mm)
+		if (flow->dest_type != BLARE_FILE_TYPE || flow->src.mm != mm)
 			continue;
 
 		file = flow->dest.file;
@@ -208,27 +208,29 @@ static int get_discrete_flows_for_mm(struct mm_struct *mm, struct list_head *vis
 }
 
 static void propagate_tags(struct info_tags *dest, const struct info_tags *src,
-		    struct info_tags *tags_added)
+			   struct info_tags *tags_added)
 {
 	int i;
 
 	/* short-circuit */
 	if (blare_stop_propagate(src) || blare_stop_propagate(dest)) {
-		for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
+		for (i = 0; i < BLARE_TAGS_NUMBER; i++)
 			tags_added->tags[i] = 0;
 		return;
 	}
 
 	/* we have to merge the new tags with the ones already present
 	 * in the destination container */
-	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++) {
+	for (i = 0; i < BLARE_TAGS_NUMBER; i++) {
 		tags_added->tags[i] = src->tags[i] & ~(dest->tags[i]);
 		if (blare_enabled)
 			dest->tags[i] |= src->tags[i];
 	}
 }
 
-static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, const struct info_tags *tags, struct info_tags *tags_added)
+static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list,
+			   const struct info_tags *tags,
+			   struct info_tags *tags_added)
 {
 	struct blare_mm_sec *msec = mm->m_sec;
 	int ret = 0;
@@ -244,7 +246,9 @@ static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list, c
 	return ret;
 }
 
-static int propagate_to_file(struct file *file, struct list_head *visit_list, const struct info_tags *tags, struct info_tags *tags_added)
+static int propagate_to_file(struct file *file, struct list_head *visit_list,
+			     const struct info_tags *tags,
+			     struct info_tags *tags_added)
 {
 	struct inode *inode = file_inode(file);
 	struct blare_inode_sec *isec = inode->i_security;
@@ -263,8 +267,10 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list, co
 			inode_unlock(inode);
 			inode_lock(inode);
 			rc = inode->i_op->setxattr(dentry, inode,
-				BLARE_XATTR_TAG, isec->info.tags,
-				BLARE_TAGS_NUMBER * sizeof(__u32), 0);
+						   BLARE_XATTR_TAG,
+						   isec->info.tags,
+						   BLARE_TAGS_NUMBER *
+						   sizeof(__u32), 0);
 			if (!rc)
 				fsnotify_xattr(dentry);
 			inode_unlock(inode);
@@ -280,18 +286,20 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list, co
 	return ret;
 }
 
-static void __trace_all(const struct info_tags *tags, const struct bfs_elt *flow)
+static void __trace_all(const struct info_tags *tags,
+			const struct bfs_elt *flow)
 {
-	void *src = flow->src_type == BLARE_MM_TYPE     ?    (void*) flow->src.mm :
-		    flow->src_type == BLARE_FILE_TYPE   ?    (void*) flow->src.file :
-		 /* flow->src_type == BLARE_MSG_TYPE    ? */ (void*) flow->src.msg;
-	void *dest = flow->dest_type == BLARE_MM_TYPE   ?    (void*) flow->dest.mm :
-	         /*  flow->dest_type == BLARE_FILE_TYPE ? */ (void*) flow->dest.file;
+	void *src = flow->src_type == BLARE_MM_TYPE ? (void *)flow->src.mm :
+	    flow->src_type == BLARE_FILE_TYPE ? (void *)flow->src.file :
+	    /* flow->src_type == BLARE_MSG_TYPE    ? */ (void *)flow->src.msg;
+	void *dest = flow->dest_type == BLARE_MM_TYPE ? (void *)flow->dest.mm :
+	    /*  flow->dest_type == BLARE_FILE_TYPE ? */ (void *)flow->dest.file;
 
 	blare_trace_all(tags, src, flow->src_type, dest, flow->dest_type);
 }
 
-static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags *new_tags)
+static int __register_new_flow(struct bfs_elt *new_flow,
+			       const struct info_tags *new_tags)
 {
 	LIST_HEAD(visit_list);
 	struct bfs_elt *next, *temp;
@@ -304,12 +312,16 @@ static int __register_new_flow(struct bfs_elt *new_flow, const struct info_tags 
 			struct file *file = next->dest.file;
 			struct inode *inode = file_inode(file);
 			inode_lock_shared(inode);
-			ret = propagate_to_file(file, &visit_list, new_tags, &tags_added);
+			ret =
+			    propagate_to_file(file, &visit_list, new_tags,
+					      &tags_added);
 			inode_unlock_shared(inode);
 			fput(file);
 		} else {
 			struct mm_struct *mm = next->dest.mm;
-			ret = propagate_to_mm(mm, &visit_list, new_tags, &tags_added);
+			ret =
+			    propagate_to_mm(mm, &visit_list, new_tags,
+					    &tags_added);
 			mmput(mm);
 		}
 
@@ -440,7 +452,8 @@ int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 /*
  * called from setprocattr (write into /proc/self/attr/current)
  */
-static int __register_new_tags_for_mm(const struct info_tags *new_tags, struct mm_struct *mm)
+static int __register_new_tags_for_mm(const struct info_tags *new_tags,
+				      struct mm_struct *mm)
 {
 	struct bfs_elt *first_flow;
 
@@ -474,8 +487,9 @@ int register_read(struct file *file)
 {
 	int ret = 0;
 	struct mm_struct *mm = current->mm;
-	struct inode *inode =file_inode(file);
-	struct discrete_flow *flow = kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
+	struct inode *inode = file_inode(file);
+	struct discrete_flow *flow =
+	    kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
 
 	if (!flow)
 		return -ENOMEM;
@@ -504,7 +518,8 @@ int register_write(struct file *file)
 	int ret = 0;
 	struct mm_struct *mm = current->mm;
 
-	struct discrete_flow *flow = kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
+	struct discrete_flow *flow =
+	    kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
 
 	if (!flow)
 		return -ENOMEM;
@@ -532,7 +547,8 @@ int register_msg_reception(struct msg_msg *msg)
 {
 	int ret = 0;
 	struct mm_struct *mm = current->mm;
-	struct discrete_flow *flow = kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
+	struct discrete_flow *flow =
+	    kmalloc(sizeof(struct discrete_flow), GFP_KERNEL);
 
 	if (!flow)
 		return -ENOMEM;
@@ -583,9 +599,10 @@ static bool task_maybe_hashed__unlocked(struct task_struct *task)
 	return !hlist_empty(&enabled_flows_by_task[i]);
 }
 
-static void async_unregister_task_flow(struct work_struct* freer)
+static void async_unregister_task_flow(struct work_struct *freer)
 {
-	struct async_task_freer *f = container_of(freer, struct async_task_freer, work);
+	struct async_task_freer *f =
+	    container_of(freer, struct async_task_freer, work);
 	unregister_task_flow(f->task);
 	kfree(f);
 }
@@ -618,11 +635,12 @@ void unregister_dying_task_flow(struct task_struct *task)
 	schedule_work(&f->work);
 }
 
-int register_ptrace_attach(struct task_struct *tracer, struct task_struct *child)
+int register_ptrace_attach(struct task_struct *tracer,
+			   struct task_struct *child)
 {
 	struct mm_struct *child_mm = child->mm;
 	struct blare_mm_sec *child_msec = child_mm->m_sec;
-struct blare_mm_sec *tracer_msec = tracer->mm->m_sec;
+	struct blare_mm_sec *tracer_msec = tracer->mm->m_sec;
 /* we do the m_sec shring under mutex in order not to propagate tags
 	 * inconsistently if the old m_sec is being used */
 	mutex_lock(&flows_lock);
@@ -678,44 +696,3 @@ void msec_put(struct blare_mm_sec *msec)
 		kfree(msec);
 	}
 }
-
-#if 0
-static noinline int generic_add_tags(struct info_tags *dest, struct dentry *dest_dentry, const struct info_tags *src)
-{
-	int rc;
-	struct info_tags tags = {0, NULL};
-
-	rc = add_tags(dest, src, &tags);
-	if (rc < 0 || tags.count == 0)
-		 return rc;
-
-	rc = 0;
-	if (dest_dentry) {
-		struct inode *inode = d_backing_inode(dest_dentry);
-		if (!inode) {
-			pr_err("Blare: No inode corresponding to dentry");
-			rc = -ENODATA;
-		} else if (inode->i_op->setxattr) {
-			inode_lock(inode);
-			rc = inode->i_op->setxattr(dest_dentry, inode,
-						   BLARE_XATTR_TAG,
-						   tags.tags, tags.count,
-						   0);
-			if (!rc)
-				fsnotify_xattr(dest_dentry);
-			inode_unlock(inode);
-		}
-	}
-
-	if (rc >= 0) { /* the new tags have been computed and propagated into the
-		      inode's xattr, if required. Time to commit the changes */
-		__s32 *old_tags = dest->tags;
-		dest->tags = tags.tags;
-		dest->count = tags.count;
-		kfree(old_tags);
-	}
-
-	 return rc;
-}
-}
-#endif
