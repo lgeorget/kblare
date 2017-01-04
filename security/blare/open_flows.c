@@ -28,11 +28,29 @@
 
 #define BLARE_HASHTABLE_SHIFT 10
 
+/**
+ * struct async_task_freer - Work struct responsible for freeing one task_struct
+ * @task:	The task to free.
+ * @work:	The work struct that can be enqueued in a work queue.
+ */
 struct async_task_freer {
 	struct task_struct *task;
 	struct work_struct work;
 };
 
+/**
+ * struct discrete_flow - Describes a discrete flow from a file, a memory space
+ * or a message to a file or a memory space.
+ * @resp:	The process that has generated the flow.
+ * @src:	The container of information source of the flow.
+ * @dest:	The container of information destination of the flow.
+ * @src_type:	The type of the source container, either BLARE_FILE_TYPE,
+ * 		BLARE_MM_TYPE or BLARE_MSG_TYPE.
+ * @dest_type:	The type of the destination container, either BLARE_FILE_TYPE
+ * 		or BLARE_MM_TYPE.
+ * @by_src:	The map source container -> discrete flows.
+ * @by_task:	The map responsible task -> discrete flows.
+ */
 struct discrete_flow {
 	struct task_struct *resp;
 	union {
@@ -50,6 +68,15 @@ struct discrete_flow {
 	struct hlist_node by_task;	/* table of enabled flows, by responsible task_struct* */
 };
 
+/**
+ * struct bfs_elt - Describes an element of the Breadth-Depth Search needed by
+ * the Jaume-Georget algorithm.
+ * @src:	The source container of information.
+ * @dest:	The destination container of information.
+ * @src_type:	The type of the soruce container.
+ * @dest_type:	The type of the destination container.
+ * @list:	The queue of bfs_elt to visit in the BDS.
+ */
 struct bfs_elt {
 	union {
 		struct file *file;
@@ -69,6 +96,14 @@ static DEFINE_HASHTABLE(enabled_flows_by_src, BLARE_HASHTABLE_SHIFT);
 static DEFINE_HASHTABLE(enabled_flows_by_task, BLARE_HASHTABLE_SHIFT);
 static DEFINE_MUTEX(flows_lock);
 
+/**
+ * get_mms_for_file() - Retrieves all the mm-s a file is mmapped in and enqueue
+ * them for BFV.
+ * @file:	The file of interest.
+ * @visit_list:	The BFV queue.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 static int get_mms_for_file(struct file *file, struct list_head *visit_list)
 {
 	struct inode *inode = file_inode(file);
@@ -112,6 +147,14 @@ unlock:
 	return ret;
 }
 
+/**
+ * get_files_for_mm() - Retrieves all the files mmaped as shared and writable
+ * in a given memory space.
+ * @mm:		The memory space of interest.
+ * @visit_list:	The BFV queue.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 static int get_files_for_mm(struct mm_struct *mm, struct list_head *visit_list)
 {
 	struct vm_area_struct *vma;
@@ -149,6 +192,14 @@ unlock:
 	return ret;
 }
 
+/**
+ * get_discrete_flows_for_file() - Retrieves all the discrete flows currently
+ * occurring having a given file as source.
+ * @file:	The file of interest.
+ * @visit_list:	The BFV queue.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 static int get_discrete_flows_for_file(struct file *file,
 				       struct list_head *visit_list)
 {
@@ -179,6 +230,14 @@ static int get_discrete_flows_for_file(struct file *file,
 	return 0;
 }
 
+/**
+ * get_discrete_flows_for_mm() - Retrieves the discrete flows currently
+ * occurring having a given mm as source.
+ * @mm:		The memory space of interest.
+ * @visit_list:	The BFV queue.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 static int get_discrete_flows_for_mm(struct mm_struct *mm,
 				     struct list_head *visit_list)
 {
@@ -207,6 +266,18 @@ static int get_discrete_flows_for_mm(struct mm_struct *mm,
 	return 0;
 }
 
+/**
+ * propagate_tags() - Merge a set of tags into another and compute the set
+ * difference.
+ * @dest:	The destination set of tags.
+ * @src:	The source set of tags.
+ * @tags_added:	Output set of tags which will receives src - dest or the empty
+ * 		set if either the source or the destination stops the
+ * 		propagation.
+ *
+ * When Blare is disabled, the set tags_added is computed anyway but dest is
+ * left untouched.
+ */
 static void propagate_tags(struct info_tags *dest, const struct info_tags *src,
 			   struct info_tags *tags_added)
 {
@@ -228,6 +299,21 @@ static void propagate_tags(struct info_tags *dest, const struct info_tags *src,
 	}
 }
 
+/**
+ * propagate_to_mm() - Propagates a set of tags to a memory space.
+ * @mm:		The memory space of interest.
+ * @visit_list:	The BFV queue.
+ * @tags:	The tags to propagate.
+ * @tags_added:	Where to store the tags effectively added to the memory space.
+ *
+ * This function merges tags into the mm's itags, computes the new tags that
+ * have been added and add to the BFV queue the containers which are
+ * destination of an enabled flow from that memory space. When Blare is
+ * disabled, the mm's itags are left untouched but tags_added is computed
+ * anyway.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list,
 			   const struct info_tags *tags,
 			   struct info_tags *tags_added)
@@ -246,6 +332,22 @@ static int propagate_to_mm(struct mm_struct *mm, struct list_head *visit_list,
 	return ret;
 }
 
+/**
+ * propagate_to_file() - Propagates a set of tags to a file.
+ * @file:		The file of interest.
+ * @visit_list:	The BFV queue.
+ * @tags:	The tags to propagate.
+ * @tags_added:	Where to store the tags effectively added to the file.
+ *
+ * This function merges tags into the file's itags, computes the new tags that
+ * have been added and add to the BFV queue the containers which are
+ * destination of an enabled flow from that file. The extended attributes of the
+ * files are also updated.
+ * When Blare is disabled, the file's itags are left untouched but tags_added is
+ * computed anyway.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 static int propagate_to_file(struct file *file, struct list_head *visit_list,
 			     const struct info_tags *tags,
 			     struct info_tags *tags_added)
@@ -286,18 +388,36 @@ static int propagate_to_file(struct file *file, struct list_head *visit_list,
 	return ret;
 }
 
+/**
+ * __trace_all() - Outputs a trace for all the traced tags in a given set of
+ * tags
+ * @tags:	The set of tags.
+ * @flow:	The flow which causing the tags to be propagated.
+ */
 static void __trace_all(const struct info_tags *tags,
 			const struct bfs_elt *flow)
 {
-	void *src = flow->src_type == BLARE_MM_TYPE ? (void *)flow->src.mm :
-	    flow->src_type == BLARE_FILE_TYPE ? (void *)flow->src.file :
-	    /* flow->src_type == BLARE_MSG_TYPE    ? */ (void *)flow->src.msg;
-	void *dest = flow->dest_type == BLARE_MM_TYPE ? (void *)flow->dest.mm :
-	    /*  flow->dest_type == BLARE_FILE_TYPE ? */ (void *)flow->dest.file;
+	void *src =
+	    flow->src_type == BLARE_MM_TYPE	?	(void *)flow->src.mm :
+	    flow->src_type == BLARE_FILE_TYPE	?	(void *)flow->src.file :
+	 /* flow->src_type == BLARE_MSG_TYPE	? */	(void *)flow->src.msg;
+	void *dest =
+	    flow->dest_type == BLARE_MM_TYPE	?	(void *)flow->dest.mm :
+	 /* flow->dest_type == BLARE_FILE_TYPE	? */	(void *)flow->dest.file;
 
 	blare_trace_all(tags, src, flow->src_type, dest, flow->dest_type);
 }
 
+/**
+ * __register_new_flow() - Starts a tag propagation
+ * @new_flow:	The first flow, starting the propagation.
+ * @new_tags:	The tags involved in the first flow.
+ *
+ * This function does the Breadth-First Visit, starting with an initial flow.
+ * The tags passed as parameters are propagated to all containers of information
+ * reachable from the destination of that first flow.
+ * Returns: 0 or -ENOMEM.
+ */
 static int __register_new_flow(struct bfs_elt *new_flow,
 			       const struct info_tags *new_tags)
 {
@@ -372,6 +492,14 @@ static int __register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 	return __register_new_flow(first_flow, &isec->info);
 }
 
+/**
+ * register_flow_file_to_mm() - Registers the enabling of a new discrete flow
+ * from a file to a process, and start the tag propagation.
+ * @file:	The file destination of the information flow.
+ * @mm:		The memory structure of the process.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 int register_flow_file_to_mm(struct file *file, struct mm_struct *mm)
 {
 	int ret;
@@ -406,6 +534,14 @@ static int __register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 	return __register_new_flow(first_flow, &msec->info);
 }
 
+/**
+ * register_flow_mm_to_file() - Registers the enabling of a new discrete flow
+ * from a process to a file, and start the tag propagation.
+ * @mm:		The memory structure of the process.
+ * @file:	The file destination of the information flow.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 int register_flow_mm_to_file(struct mm_struct *mm, struct file *file)
 {
 	int ret;
@@ -440,6 +576,15 @@ static int __register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 	return __register_new_flow(first_flow, &msgsec->info);
 }
 
+
+/**
+ * register_msg_reception() - Registers the enabling of a new discrete flow
+ * from a message to a process, and start the tag propagation.
+ * @msg:	The message of interest.
+ * @mm:		The memory structure of the receiving process.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 int register_flow_msg_to_mm(struct msg_msg *msg, struct mm_struct *mm)
 {
 	int ret;
@@ -472,6 +617,14 @@ static int __register_new_tags_for_mm(const struct info_tags *new_tags,
 	return __register_new_flow(first_flow, new_tags);
 }
 
+/**
+ * register_new_tags_for_mm() - Register the addition of new tags to a process,
+ * and start the propagation.
+ * @tags:	The new tags.
+ * @mm:		The memory space of the process receiving the new tags.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 int register_new_tags_for_mm(const struct info_tags *tags, struct mm_struct *mm)
 {
 	int ret;
@@ -481,8 +634,13 @@ int register_new_tags_for_mm(const struct info_tags *tags, struct mm_struct *mm)
 	return ret;
 }
 
-/* other flows to cover: clone (and fork...) */
-
+/**
+ * register_read() - Registers the enabling of a new discrete flow from a file
+ * to the current process, and start the tag propagation.
+ * @file:	The file of interest.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 int register_read(struct file *file)
 {
 	int ret = 0;
@@ -513,6 +671,13 @@ int register_read(struct file *file)
 	return ret;
 }
 
+/**
+ * register_write() - Registers the enabling of a new discrete flow from the
+ * current process to a file, and start the tag propagation.
+ * @file:	The file of interest.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 int register_write(struct file *file)
 {
 	int ret = 0;
@@ -543,6 +708,13 @@ int register_write(struct file *file)
 	return ret;
 }
 
+/**
+ * register_msg_reception() - Registers the enabling of a new discrete flow
+ * from a message to the current process, and start the tag propagation.
+ * @msg:	The message of interest.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 int register_msg_reception(struct msg_msg *msg)
 {
 	int ret = 0;
@@ -569,6 +741,11 @@ int register_msg_reception(struct msg_msg *msg)
 	return ret;
 }
 
+/**
+ * unregister_task_flow() - Marks the discrete flow generated by a given
+ * process as finished.
+ * @p:	The process of interest.
+ */
 static void unregister_task_flow(struct task_struct *p)
 {
 	struct discrete_flow *flow;
@@ -588,17 +765,38 @@ static void unregister_task_flow(struct task_struct *p)
 	mutex_unlock(&flows_lock);
 }
 
+/**
+ * unregister_current_flow() - Marks the discrete flow generated by the current
+ * process as finished.
+ */
 void unregister_current_flow(void)
 {
 	unregister_task_flow(current);
 }
 
+/**
+ * task_maybe_hashed__unlocked() - Checks whether a task might be responsible
+ * of an enabled discrete flow.
+ * @task:	The task of interest.
+ *
+ * This function's error is one-sided: it is possible that it returns true
+ * erroneaously but it will never say that a task is not responsible of any
+ * flow when it in fact is.
+ *
+ * Returns: false only if it is impossible that the task is responsible of an
+ * enabled discrete flow.
+ */
 static bool task_maybe_hashed__unlocked(struct task_struct *task)
 {
 	int i = hash_min((u64) task, HASH_BITS(enabled_flows_by_task));
 	return !hlist_empty(&enabled_flows_by_task[i]);
 }
 
+/**
+ * async_unregister_task_flow() - Removes all discrete flows caused by a task
+ * which is about to disappear.
+ * @freer:	The work structure which contains the task to handle.
+ */
 static void async_unregister_task_flow(struct work_struct *freer)
 {
 	struct async_task_freer *f =
@@ -607,7 +805,11 @@ static void async_unregister_task_flow(struct work_struct *freer)
 	kfree(f);
 }
 
- /*
+ /**
+  * unregister_dying_task_flow() - Removes all discrete flows caused by a task
+  * which is about to disappear.
+  * @task:	The dying process.
+  *
   * This can be called from interrupt context from blare_task_free so populate
   * a workqueue to do the work
   */
@@ -635,13 +837,24 @@ void unregister_dying_task_flow(struct task_struct *task)
 	schedule_work(&f->work);
 }
 
+/**
+ * register_ptrace_attach() - Registers the existence of a continuous flow
+ * between a ptracer and a ptracee.
+ * @tracer:	The process doing the ptrace.
+ * @child:	The process being ptraced.
+ *
+ * This function propagates the tags between the ptracee and the ptracer and
+ * then replaces the ptracee's memory space security structure by a reference
+ * to the ptracer's one. This way, any tag propagation to one of the process
+ * also impacts the other one.
+ */
 int register_ptrace_attach(struct task_struct *tracer,
 			   struct task_struct *child)
 {
 	struct mm_struct *child_mm = child->mm;
 	struct blare_mm_sec *child_msec = child_mm->m_sec;
 	struct blare_mm_sec *tracer_msec = tracer->mm->m_sec;
-/* we do the m_sec shring under mutex in order not to propagate tags
+	/* we do the m_sec sharing under mutex in order not to propagate tags
 	 * inconsistently if the old m_sec is being used */
 	mutex_lock(&flows_lock);
 	msec_get(tracer_msec);
@@ -652,6 +865,15 @@ int register_ptrace_attach(struct task_struct *tracer,
 	return 0;
 }
 
+/**
+ * unregister_ptrace() - Marks the continuous flow started by a ptrace
+ * attachement as stopped.
+ * @child:	The formerly ptraced process.
+ *
+ * This functions unshares the memory space security structures of the ptracer
+ * and the ptracee, effectively stopping the automatic propagation of tags from
+ * one to the other.
+ */
 void unregister_ptrace(struct task_struct *child)
 {
 	struct mm_struct *child_mm = child->mm;
@@ -671,6 +893,11 @@ void unregister_ptrace(struct task_struct *child)
 	mutex_unlock(&flows_lock);
 }
 
+/**
+ * dup_msec() - Duplicates a memory space security structure by allocating a new
+ * one and copying the tags over.
+ * @old_msec:	The security structure to duplicate.
+ */
 struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec)
 {
 	struct blare_mm_sec *msec;
@@ -685,11 +912,21 @@ nomem:
 	return ERR_PTR(-ENOMEM);
 }
 
+/**
+ * msec_get() - Increases the reference counter of a memory space security
+ * structure.
+ * @msec: The memory space security structure of interest.
+ */
 void msec_get(struct blare_mm_sec *msec)
 {
 	atomic_inc_not_zero(&msec->users);
 }
 
+/**
+ * msec_put() - Decreases the reference counter of a memory space security
+ * structure and frees it if it reaches zero.
+ * @msec: The memory space security structure of interest.
+ */
 void msec_put(struct blare_mm_sec *msec)
 {
 	if (atomic_dec_and_test(&msec->users)) {

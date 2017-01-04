@@ -36,19 +36,39 @@ struct msg_msg;
 /* defined in securityfs */
 extern int blare_enabled;
 
+/**
+ * struct info_tags - Information tags (itags) of a container of information
+ * @tags: 	a bit-field representing the itag, bit i corresponds to tag i
+ * 		(in the local endianess)
+ */
 struct info_tags {
 	__u32 tags[BLARE_TAGS_NUMBER];
 };
 
+/**
+ * struct blare_inode_sec - Security structure for the inodes
+ * @info: 	Contains the information tags of the inode.
+ */
 struct blare_inode_sec {
 	struct info_tags info;
 };
 
+/**
+ * struct blare_mm_sec - Security struct for the memory spaces (mm_struct)
+ * @info: 	Contains the information tags of the memory space.
+ * @users: 	Stores the numbers of processes sharing the same structure.
+ * 		Two processes share their blare_mm_sec structure when one is
+ * 		ptracing the other.
+ */
 struct blare_mm_sec {
 	struct info_tags info;
 	atomic_t users;
 };
 
+/**
+ * struct blare_msg_sec - Security structure for the messages of message queues
+ * @info:	Contains the information tags of the message.
+ */
 struct blare_msg_sec {
 	struct info_tags info;
 };
@@ -70,6 +90,12 @@ struct blare_mm_sec *dup_msec(struct blare_mm_sec *old_msec);
 void msec_get(struct blare_mm_sec *msec);
 void msec_put(struct blare_mm_sec *msec);
 
+/**
+ * tags_count() - Counts the number of tags in an info_tags structure.
+ * @tags:	The itags to count.
+ *
+ * Return: The number of tags in the set of itags represented by tags.
+ */
 static inline int tags_count(const struct info_tags *tags) {
 	int count = 0;
 	int i;
@@ -78,12 +104,25 @@ static inline int tags_count(const struct info_tags *tags) {
 	return count;
 }
 
+/**
+ * initialize_tags() - Zeroes an info_tags structure.
+ * @tags:	The itags to initialize.
+ */
 static inline void initialize_tags(struct info_tags *tags) {
 	int i;
 	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
 		tags->tags[i] = 0;
 }
 
+/**
+ * copy_tags() - Copies itags from one info_tags structure to another.
+ * @dest:	The destination info_tags structure.
+ * @src:	The source info_tags structure.
+ *
+ * The destination structure is erased and replaced by the content of the
+ * source. This functions is not typically useful for tags propagation but
+ * rather for initialization.
+ */
 static inline void copy_tags(struct info_tags *dest, const struct info_tags *src) {
 	int i;
 	for (i=0 ; i<BLARE_TAGS_NUMBER ; i++)
@@ -98,7 +137,17 @@ int blare_trace_all(const struct info_tags* tags_added, void* src, int src_type,
 int blare_tags_to_string(const __u32 *tag, char** buffer);
 int blare_tags_from_string(const char* buf, size_t length, __u32 *tag);
 
-/* Tag 0 stops the propagation, and doesn't propagate */
+/**
+ * blare_stop_propagate() - Checks whether an info_tags is marked as preventing
+ * tag propagation.
+ * @tags:	The info_tags structure.
+ *
+ * Tag 0 has a special semantics and stops the tag propagation when set. It
+ * itself doesn't propagate.
+ *
+ * Returns: True if, and only if, no tags can be propagated to or from the
+ * info_tags structure.
+ */
 static inline bool blare_stop_propagate(const struct info_tags* tags) {
 	return (tags->tags[0] & 1);
 }

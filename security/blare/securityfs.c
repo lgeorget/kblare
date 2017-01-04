@@ -10,6 +10,13 @@
 static __u32 blare_traced[BLARE_TAGS_NUMBER];
 int blare_enabled;
 
+/**
+ * __blare_print_file() - Pretty-print a file to a string.
+ * @file:	The file to print.
+ *
+ * Returns: 	A newly-allocated string containing a textual description of
+ * 		file, or ERR_PTR(-ENOMEM) if memory is insufficient.
+ */
 static char *__blare_print_file(struct file *file)
 {
 	int n = snprintf(NULL, 0, "%pd4", file->f_path.dentry);
@@ -20,6 +27,13 @@ static char *__blare_print_file(struct file *file)
 	return str;
 }
 
+/**
+ * __blare_print_task() - Pretty-print a task to a string.
+ * @task:	The task to print.
+ *
+ * Returns: 	A newly-allocated string containing a textual description of
+ * 		task, or ERR_PTR(-ENOMEM) if memory is insufficient.
+ */
 static char *__blare_print_task(struct task_struct *p)
 {
 	int n = snprintf(NULL, 0, "process %i | %s", p->pid, p->comm);
@@ -30,6 +44,13 @@ static char *__blare_print_task(struct task_struct *p)
 	return str;
 }
 
+/**
+ * __blare_print_msg() - Pretty-print a message to a string.
+ * @msg:	The message to print.
+ *
+ * Returns: 	A newly-allocated string containing a textual description of
+ * 		msg, or ERR_PTR(-ENOMEM) if memory is insufficient.
+ */
 static char *__blare_print_msg(struct msg_msg *msg)
 {
 	int n = snprintf(NULL, 0, "msg %p", msg);
@@ -40,6 +61,17 @@ static char *__blare_print_msg(struct msg_msg *msg)
 	return str;
 }
 
+/**
+ * __blare_trace_mm() - Print the trace of a tag reaching a memory space for the
+ * first time.
+ * @tag:	The tag involved in the propagation.
+ * @mm:		The memory space acquiring the tag for the first time.
+ * @src_str:	A textual description of the origin of the tag.
+ *
+ * Prints a trace line to the kernel ring buffer for every process having that
+ * memory space.
+ * Returns: 0 or -ENOMEM.
+ */
 static int __blare_trace_mm(int tag, struct mm_struct *mm, char *src_str)
 {
 	char *dest_str;
@@ -60,6 +92,21 @@ static int __blare_trace_mm(int tag, struct mm_struct *mm, char *src_str)
 	return 0;
 }
 
+/**
+ * blare_trace() - Outputs a trace when a traced tag has reached a new container
+ * of information.
+ * @tag:		The traced tag involved in the tag propagation.
+ * @src:		The source container.
+ * @source_type:	The type of the source (message, memory space or file).
+ * @dest:		The destination container.
+ * @dest_type:		The type of the destination (memory space or file).
+ *
+ * A trace line is printed to the kernel ring buffer to log the occurrence of
+ * the flow that made dest acquire tag. Several lines may be printed because
+ * memory spaces are "dereferenced": a line is printed for every process owning
+ * it.
+ * Returns: 0 or -ENOMEM.
+ */
 static int blare_trace(int tag, void *src, int source_type, void *dest,
 		       int dest_type)
 {
@@ -141,6 +188,12 @@ end:
 	return rc;
 }
 
+/**
+ * __is_traced() - Tells whether a given tag is traced.
+ * @tag:	The tag of interest.
+ *
+ * Returns: A boolean value indicating whether tag is traced.
+ */
 static bool __is_traced(int tag)
 {
 	int index;
@@ -154,7 +207,14 @@ static bool __is_traced(int tag)
 	return blare_traced[index] & (1 << offset);
 }
 
-bool blare_is_traced(const struct info_tags * tags_added)
+/**
+ * blare_is_traced() - Tests whether a set of propagated tags includes a traced
+ * tag.
+ * @tags_added:	A set of tags.
+ *
+ * Returns: A boolean value indicating whether tags_added includes a traced tag.
+ */
+bool blare_is_traced(const struct info_tags *tags_added)
 {
 	int i;
 	for (i = 0; i < BLARE_TAGS_NUMBER; i++)
@@ -163,6 +223,16 @@ bool blare_is_traced(const struct info_tags * tags_added)
 	return false;
 }
 
+/**
+ * blare_trace_all() - Outputs a trace for every traced tags in a set of tags.
+ * @tags_added:	A set of tags.
+ * @src:	The source container of the information flow.
+ * @src_type:	The type of the source container, memory space, message or file.
+ * @dest:	The destination container.
+ * @dest_type:	The type of the destination container.
+ *
+ * Returns: 0 or -ENOMEM.
+ */
 int blare_trace_all(const struct info_tags *tags_added, void *src, int src_type,
 		    void *dest, int dest_type)
 {
@@ -179,6 +249,15 @@ int blare_trace_all(const struct info_tags *tags_added, void *src, int src_type,
 	return 0;
 }
 
+/**
+ * blare_tags_to_string() - Stringifies a bitfield of tags for output.
+ * @tag:	The tags to stringify.
+ * @buffer:	Where to output the result string, will be allocated by this
+ * 		function.
+ *
+ * Returns: The length of the buffer or -ENOMEM. The buffer is left untouched in
+ * the latter case.
+ */
 int blare_tags_to_string(const __u32 * tag, char **buffer)
 {
 	int i, j;
@@ -213,6 +292,15 @@ int blare_tags_to_string(const __u32 * tag, char **buffer)
 	return length;
 }
 
+/**
+ * blare_tags_from_string() - Parses a string to build a bitfield of tags.
+ * @buf:	The string to parse.
+ * @length:	The length of the string, not including the final nul byte.
+ * @tags:	Where to store the result, must be allocated by the caller.
+ *
+ * Returns:	The length of the input string if it could be parsed correctly,
+ * 		-EINVAL otherwise.
+ */
 int blare_tags_from_string(const char *buf, size_t length, __u32 * tags)
 {
 	int offset = 0;
@@ -237,17 +325,38 @@ int blare_tags_from_string(const char *buf, size_t length, __u32 * tags)
 	return offset;
 }
 
+/**
+ * blare_fs_itag_size_show() - Outputs the size of the itags bitfield.
+ * @seq:	The output file.
+ * @v:		An argument, unused.
+ *
+ * Returns: 0.
+ */
 static int blare_fs_itag_size_show(struct seq_file *seq, void *v)
 {
 	seq_puts(seq, BLARE_TAGS_NUMBER_STR "\n");
 	return 0;
 }
 
+/**
+ * blare_fs_itag_size_open() - Opens the itag size file.
+ * @inode:	The inode to open, unused.
+ * @file:	The file to open.
+ *
+ * Returns: Whatever single_open() returns.
+ */
 static int blare_fs_itag_size_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, blare_fs_itag_size_show, NULL);
 }
 
+/**
+ * blare_fs_traced_show() - Outputs the currently traced tags.
+ * @seq:	The output file.
+ * @v:		An argument, unused.
+ *
+ * Returns: 0.
+ */
 static int blare_fs_traced_show(struct seq_file *seq, void *v)
 {
 	int i, j;
@@ -261,11 +370,23 @@ static int blare_fs_traced_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
+/**
+ * blare_fs_traced_open() - Opens the traced file.
+ * @inode:	The inode to open, unused.
+ * @file:	The file to open.
+ *
+ * Returns: Whatever single_open() returns.
+ */
 static int blare_fs_traced_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, blare_fs_traced_show, NULL);
 }
 
+
+/**
+ * __blare_fs_mark_as_traced() - Marks a tag as traced.
+ * @tag:	The tag to mark as traced.
+ */
 static void __blare_fs_mark_as_traced(int tag)
 {
 	int index = tag / 32;
@@ -273,6 +394,10 @@ static void __blare_fs_mark_as_traced(int tag)
 	blare_traced[index] |= 1 << offset;
 }
 
+/**
+ * __blare_fs_mark_as_untraced() - Marks a tag as no longer traced.
+ * @tag:	The tag to mark as untraced.
+ */
 static void __blare_fs_mark_as_untraced(int tag)
 {
 	int index = tag / 32;
@@ -280,6 +405,27 @@ static void __blare_fs_mark_as_untraced(int tag)
 	blare_traced[index] &= ~(1 << offset);
 }
 
+/**
+ * __blare_fs_trace_untrace_write() - Changes the set of traced tags.
+ * @file:	The file being written to, either "trace" or "untrace".
+ * @buf:	The strings containing the tags to start/stop tracing.
+ * @count:	The length of the string.
+ * @ppos:	The offset to which the file is written, must be 0.
+ * @marker:	Either __blare_fs_mark_as_trace to start tracing the tags, or
+ * 		__blare_fs_mark_as_untraced to stop tracing them.
+ *
+ * This function is common to both  the "trace" and "untrace" file, the only
+ * difference is in what is done about the tags: they are either added to the
+ * set of traced tags or removed depending on function pointer "marker".
+ * buf must be a string composed of a series of integers separated by blank
+ * characters and optionally followed by a newline character. Negative or too
+ * big values are discarded.
+ *
+ * Returns:	The value count if buf could be succesfully parsed and all the
+ * 		tags handled. -ENOMEM if there is not enough memory to handle
+ * 		input. -EINVAL if ppos is not 0 or if buf could not be parsed
+ * 		successfully.
+ */
 static ssize_t __blare_fs_trace_untrace_write(struct file *file,
 					      const char __user * buf,
 					      size_t count, loff_t * ppos,
@@ -324,6 +470,16 @@ static ssize_t __blare_fs_trace_untrace_write(struct file *file,
 	return offset;
 }
 
+/**
+ * blare_fs_untrace_write() - Writes a set of tags to start tracing to the
+ * trace file.
+ * @file:	The trace file.
+ * @buf:	The input string containing the tags to trace.
+ * @count:	The length of buf.
+ * @ppos:	The offset to which the writing will be done, must be 0.
+ *
+ * Returns: The result from __blare_fs_trace_untrace_write.
+ */
 static ssize_t blare_fs_trace_write(struct file *file, const char __user * buf,
 				    size_t count, loff_t * ppos)
 {
@@ -331,6 +487,16 @@ static ssize_t blare_fs_trace_write(struct file *file, const char __user * buf,
 					      __blare_fs_mark_as_traced);
 }
 
+/**
+ * blare_fs_untrace_write() - Writes a set of tags to stop tracing to the
+ * untrace file.
+ * @file:	The untrace file.
+ * @buf:	The input string containing the tags to untrace.
+ * @count:	The length of buf.
+ * @ppos:	The offset to which the writing will be done, must be 0.
+ *
+ * Returns: The result from __blare_fs_trace_untrace_write.
+ */
 static ssize_t blare_fs_untrace_write(struct file *file,
 				      const char __user * buf, size_t count,
 				      loff_t * ppos)
@@ -339,17 +505,48 @@ static ssize_t blare_fs_untrace_write(struct file *file,
 					      __blare_fs_mark_as_untraced);
 }
 
+/**
+ * blare_fs_enabled_show() - Outputs the state of Blare (enabled or disabled)
+ * @seq:	The output file.
+ * @v:		An argument, unused.
+ *
+ * Returns: 0.
+ */
 static int blare_fs_enabled_show(struct seq_file *seq, void *v)
 {
 	seq_printf(seq, "%d\n", blare_enabled);
 	return 0;
 }
 
+/**
+ * blare_fs_enabled_open() - Opens the enabled file.
+ * @inode:	The inode to open, unused.
+ * @file:	The file to open.
+ *
+ * Returns: Whatever single_open() returns.
+ */
 static int blare_fs_enabled_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, blare_fs_enabled_show, NULL);
 }
 
+/**
+ * blare_fs_enabled_write() - Handles writes to the enabled file, to enable or
+ * disable Blare.
+ * @file:	The file written.
+ * @buf:	What is written, must be "0", "1", "0\n" or "1\n".
+ * @count:	The size of what is written, must be 1 or 2.
+ * @ppos:	The offset at which the file is written, must be 0.
+ *
+ * The only acceptable inputs are "0" and "1", optionally followed by a line
+ * return which will be silently ignored. These values respectively disable and
+ * enable Blare. Enabling Blare while it is already enabled or disabling it
+ * while it is already disabled is a no-op.
+ *
+ * Returns: The length of the input if it was accepted, -EPERM if the writer is
+ * not privileged (CAP_MAC_ADMIN), -EINVAL if the offset is not 0 or the input
+ * invalid.
+ */
 static ssize_t blare_fs_enabled_write(struct file *file,
 				      const char __user * buf, size_t count,
 				      loff_t * ppos)
@@ -424,6 +621,12 @@ static const struct file_operations blare_enabled_ops = {
 	.release = single_release,
 };
 
+/**
+ * blare_init_fs() - Initializes Blare's securityfs.
+ *
+ * Returns:	0 if the securityfs could be initialized succesfully, the error
+ * 		code from the securityfs API otherwise.
+ */
 int blare_init_fs()
 {
 	struct dentry *root;
